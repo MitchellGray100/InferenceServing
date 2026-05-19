@@ -20,6 +20,7 @@ model_deployments
 api_keys
 inference_requests
 model_events
+idempotency_keys
 ```
 
 Core relationship flow:
@@ -33,6 +34,12 @@ users
               │     └── model_events
               └── api_keys
                     └── inference_requests
+
+users
+  └── idempotency_keys
+
+projects
+  └── idempotency_keys
 ```
 
 Important design rules:
@@ -46,6 +53,7 @@ Important design rules:
 - Raw API keys are never stored.
 - Request prompts and model responses are not stored.
 - Kubernetes state is mirrored into application status fields, but Kubernetes remains the source of truth for live pod/replica state.
+- Idempotency keys prevent duplicate side effects from retried control-plane requests.
 
 ---
 
@@ -588,6 +596,271 @@ model_deleted
 
 ---
 
+# 8. `idempotency_keys`
+
+## Purpose
+
+Stores client-provided idempotency keys for control-plane requests.
+
+This table prevents duplicate side effects when clients retry requests because of timeouts, network errors, refreshes, or double-clicks.
+
+This is especially important for operations that create or modify infrastructure, such as:
+
+```text
+deploy model
+start model
+stop model
+scale model
+delete model
+create API key
+```
+
+This table answers:
+
+> Has this user already submitted this exact control-plane operation?
+
+Normal inference requests are not idempotent in the MVP. A retry of `/v1/chat/completions` may produce a new model response, so idempotency is mainly for dashboard, CLI, and control-plane operations.
+
+## Table Definition
+
+```sql
+CREATE TABLE idempotency_keys (
+  idempotency_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+
+  -- Client-provided key from the Idempotency-Key header
+  idempotency_key TEXT NOT NULL,
+
+  -- Hash of method + path + normalized body + project/user scope
+  request_hash TEXT NOT NULL,
+
+  -- Stored response from the first successful handling of this key
+  response_status INTEGER,
+  response_body JSONB,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+
+  UNIQUE(project_id, user_id, idempotency_key)
+);
+```
+
+## Columns
+
+| Column | Type | Required | Purpose |
+|---|---:|---:|---|
+| `idempotency_key_id` | `UUID` | Yes | Primary key for the idempotency record. |
+| `project_id` | `UUID` | Yes | Project where the request was made. |
+| `user_id` | `UUID` | Yes | User who made the request. |
+| `idempotency_key` | `TEXT` | Yes | Client-provided key from the `Idempotency-Key` header. |
+| `request_hash` | `TEXT` | Yes | Hash of the original request. Used to detect conflicting retries. |
+| `response_status` | `INTEGER` | No | HTTP status code returned by the first handled request. |
+| `response_body` | `JSONB` | No | Response body returned by the first handled request. |
+| `created_at` | `TIMESTAMP` | Yes | Time the idempotency key was created. |
+| `expires_at` | `TIMESTAMP` | Yes | Time after which the key can be deleted. |
+
+## Unique Constraint
+
+```sql
+UNIQUE(project_id, user_id, idempotency_key)
+```
+
+This means a user cannot reuse the same idempotency key for two different operations inside the same project.
+
+The same key string may appear in a different project or for a different user, but within a single project/user scope, it must uniquely identify one logical operation.
+
+## Request Header
+
+Clients provide idempotency keys with this header:
+
+```http
+Idempotency-Key: deploy-qwen-small-prod-001
+```
+
+Recommended client behavior:
+
+```text
+Use a unique key per logical operation.
+Reuse the same key when retrying the same operation.
+Do not reuse the same key for a different request body.
+```
+
+## Request Hash
+
+The `request_hash` should be calculated from stable request data.
+
+Recommended hash input:
+
+```text
+HTTP method
+request path
+normalized JSON body
+project_id
+user_id
+```
+
+Example conceptual input:
+
+```text
+POST:/projects/proj_123/models:{"name":"qwen-small-prod","model":"Qwen/Qwen2.5-0.5B-Instruct"}:proj_123:usr_123
+```
+
+Hash with SHA-256 or HMAC-SHA256:
+
+```text
+request_hash = sha256(method + path + normalized_body + project_id + user_id)
+```
+
+HMAC-SHA256 with a server-side secret is stronger, but plain SHA-256 is enough for detecting mismatched retries.
+
+## Behavior
+
+### First Request
+
+When a request arrives with a new idempotency key:
+
+```text
+Request arrives
+  ↓
+No existing idempotency key
+  ↓
+Create idempotency_keys row
+  ↓
+Run operation
+  ↓
+Store response status/body
+  ↓
+Return response
+```
+
+### Retry With Same Request
+
+When a request arrives with the same idempotency key and same request hash:
+
+```text
+Request arrives
+  ↓
+Existing idempotency key found
+  ↓
+Request hash matches
+  ↓
+Return stored response
+  ↓
+Do not run operation again
+```
+
+### Retry With Different Request Body
+
+If the same key is reused with a different request hash, return a conflict error.
+
+Recommended status code:
+
+```text
+409 Conflict
+```
+
+Example response:
+
+```json
+{
+  "error": {
+    "type": "idempotency_key_conflict",
+    "message": "This Idempotency-Key was already used with a different request."
+  }
+}
+```
+
+## Example Usage
+
+### Deploy Model
+
+```http
+POST /projects/proj_123/models
+Idempotency-Key: deploy-qwen-small-prod-001
+```
+
+If the user retries this request, MiniTen should not create duplicate Kubernetes resources or duplicate deployment jobs.
+
+### Stop Model
+
+```http
+POST /projects/proj_123/models/qwen-small-prod/stop
+Idempotency-Key: stop-qwen-small-prod-001
+```
+
+If the user retries this request, MiniTen should not enqueue multiple stop jobs unnecessarily.
+
+### Scale Model
+
+```http
+POST /projects/proj_123/models/qwen-small-prod/scale
+Idempotency-Key: scale-qwen-small-prod-to-3-001
+```
+
+Body:
+
+```json
+{
+  "replicas": 3
+}
+```
+
+Retries should return the same response instead of repeatedly issuing scale operations.
+
+### Create API Key
+
+```http
+POST /projects/proj_123/api-keys
+Idempotency-Key: create-local-dev-key-001
+```
+
+API key creation has one caveat: the raw API key is usually shown only once.
+
+For the MVP, the simplest behavior is to store and replay the original response during the idempotency window.
+
+## Where This Table Is Used
+
+This table is primarily used by control-plane services:
+
+```text
+Model Deployments Service
+API Keys Service
+Project Service, optional
+Project Members Service, optional
+```
+
+It is not used for normal inference requests in the MVP.
+
+## Expiration
+
+Idempotency keys should not be stored forever.
+
+MVP recommendation:
+
+```text
+Expire after 24 hours.
+```
+
+Cleanup query:
+
+```sql
+DELETE FROM idempotency_keys
+WHERE expires_at < NOW();
+```
+
+## Important Notes
+
+- Use idempotency for operations with side effects.
+- Do not use idempotency for normal model inference requests in the MVP.
+- Store the original response so retries can receive the same result.
+- Return `409 Conflict` if the same key is reused with a different request.
+- This table works well with a future `deployment_jobs` table to prevent duplicate async jobs.
+
+
+---
+
 # Indexes
 
 Add indexes for common lookup paths.
@@ -631,6 +904,12 @@ ON model_events(project_id);
 
 CREATE INDEX idx_model_events_created_at
 ON model_events(created_at);
+
+CREATE INDEX idx_idempotency_keys_project_user
+ON idempotency_keys(project_id, user_id);
+
+CREATE INDEX idx_idempotency_keys_expires_at
+ON idempotency_keys(expires_at);
 ```
 
 ---
@@ -701,6 +980,25 @@ FROM model_events
 WHERE model_deployment_id = $1
 ORDER BY created_at DESC;
 ```
+
+
+## Check idempotency key
+
+```sql
+SELECT *
+FROM idempotency_keys
+WHERE project_id = $1
+  AND user_id = $2
+  AND idempotency_key = $3;
+```
+
+## Cleanup expired idempotency keys
+
+```sql
+DELETE FROM idempotency_keys
+WHERE expires_at < NOW();
+```
+
 
 ---
 
@@ -883,6 +1181,27 @@ CREATE TABLE model_events (
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+
+CREATE TABLE idempotency_keys (
+  idempotency_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+
+  idempotency_key TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+
+  response_status INTEGER,
+  response_body JSONB,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+
+  UNIQUE(project_id, user_id, idempotency_key)
+);
+
+
 ```
 
 ---
@@ -928,6 +1247,7 @@ This schema supports the MiniTen MVP features:
 - inference request tracking
 - deployment event history
 - dashboard metrics
+- idempotent control-plane operations
 - OpenAI-compatible request routing
 
 The key product rule is:

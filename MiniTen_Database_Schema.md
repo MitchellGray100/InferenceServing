@@ -21,6 +21,7 @@ api_keys
 inference_requests
 model_events
 idempotency_keys
+deployment_jobs
 ```
 
 Core relationship flow:
@@ -40,6 +41,9 @@ users
 
 projects
   └── idempotency_keys
+
+model_deployments
+  └── deployment_jobs
 ```
 
 Important design rules:
@@ -54,6 +58,7 @@ Important design rules:
 - Request prompts and model responses are not stored.
 - Kubernetes state is mirrored into application status fields, but Kubernetes remains the source of truth for live pod/replica state.
 - Idempotency keys prevent duplicate side effects from retried control-plane requests.
+- Deployment jobs make model lifecycle operations asynchronous and retryable.
 
 ---
 
@@ -861,6 +866,324 @@ WHERE expires_at < NOW();
 
 ---
 
+# 9. `deployment_jobs`
+
+## Purpose
+
+Stores asynchronous jobs for model lifecycle operations.
+
+This table lets MiniTen return quickly from slow control-plane requests while a background Deployment Worker or Reconciler performs the actual Kubernetes work.
+
+This is useful because model operations can take a long time:
+
+```text
+deploy model
+start model
+stop model
+scale model
+delete model
+sync status
+```
+
+This table answers:
+
+> What model lifecycle work needs to be processed, retried, or inspected?
+
+The `deployment_jobs` table is for control-plane operations only. Normal inference requests, such as `/v1/chat/completions`, should not use this queue in the MVP.
+
+## Table Definition
+
+```sql
+CREATE TABLE deployment_jobs (
+  deployment_job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+
+  model_deployment_id UUID
+    REFERENCES model_deployments(model_deployment_id)
+    ON DELETE CASCADE,
+
+  job_type TEXT NOT NULL CHECK (job_type IN (
+    'deploy_model',
+    'start_model',
+    'stop_model',
+    'scale_model',
+    'delete_model',
+    'sync_status'
+  )),
+
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+    'queued',
+    'running',
+    'succeeded',
+    'failed',
+    'retrying'
+  )),
+
+  payload JSONB NOT NULL DEFAULT '{}',
+
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
+
+  locked_by TEXT,
+  locked_at TIMESTAMP,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## Columns
+
+| Column | Type | Required | Purpose |
+|---|---:|---:|---|
+| `deployment_job_id` | `UUID` | Yes | Primary key for the deployment job. |
+| `project_id` | `UUID` | Yes | Project that owns the job. |
+| `model_deployment_id` | `UUID` | No | Model deployment this job targets. Nullable for jobs that may run before a deployment row fully exists. |
+| `job_type` | `TEXT` | Yes | Type of lifecycle operation to perform. |
+| `status` | `TEXT` | Yes | Current job status. |
+| `payload` | `JSONB` | Yes | Operation-specific details needed by the worker. |
+| `attempts` | `INTEGER` | Yes | Number of times the worker has attempted the job. |
+| `max_attempts` | `INTEGER` | Yes | Maximum attempts before marking the job failed. |
+| `last_error` | `TEXT` | No | Most recent error message if the job failed or is retrying. |
+| `locked_by` | `TEXT` | No | Worker instance currently processing the job. |
+| `locked_at` | `TIMESTAMP` | No | Time the job was locked by a worker. |
+| `created_at` | `TIMESTAMP` | Yes | Time the job was created. |
+| `updated_at` | `TIMESTAMP` | Yes | Last time the job was updated. |
+
+## Job Types
+
+Allowed job types:
+
+```text
+deploy_model
+start_model
+stop_model
+scale_model
+delete_model
+sync_status
+```
+
+| Job Type | Meaning |
+|---|---|
+| `deploy_model` | Create Kubernetes resources for a model deployment. |
+| `start_model` | Scale a stopped deployment back up. |
+| `stop_model` | Scale a deployment down to zero. |
+| `scale_model` | Change replica count or autoscaling settings. |
+| `delete_model` | Delete Kubernetes resources and mark the deployment deleted. |
+| `sync_status` | Reconcile MiniTen metadata with live Kubernetes state. |
+
+## Status Values
+
+Allowed statuses:
+
+```text
+queued
+running
+succeeded
+failed
+retrying
+```
+
+| Status | Meaning |
+|---|---|
+| `queued` | Job is waiting to be picked up by a worker. |
+| `running` | A worker has locked and is processing the job. |
+| `succeeded` | Job completed successfully. |
+| `failed` | Job failed and has no attempts remaining. |
+| `retrying` | Job failed but can be retried. |
+
+## How It Works
+
+### Create Job
+
+When a user requests a lifecycle operation, the API writes metadata and inserts a job.
+
+```text
+User requests deploy/start/stop/scale/delete
+  ↓
+Model Deployments Service validates permissions
+  ↓
+Model Deployments Service writes or updates model_deployments
+  ↓
+Model Deployments Service inserts deployment_jobs row
+  ↓
+API returns quickly with queued/running status
+```
+
+### Process Job
+
+A background Deployment Worker polls for queued jobs.
+
+```text
+Deployment Worker polls deployment_jobs
+  ↓
+Worker locks one queued job
+  ↓
+Worker marks job running
+  ↓
+Worker calls OKE / Kubernetes API
+  ↓
+Worker updates model_deployments status
+  ↓
+Worker writes model_events
+  ↓
+Worker marks job succeeded or failed
+```
+
+## Example Job Payloads
+
+### Deploy Model
+
+```json
+{
+  "deployment_name": "qwen-small-prod",
+  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "k8s_namespace": "miniten-personal",
+  "k8s_deployment_name": "qwen-small-prod-v1",
+  "k8s_service_name": "qwen-small-prod",
+  "replicas": 1,
+  "resources": {
+    "cpu_request": "2",
+    "cpu_limit": "4",
+    "memory_request": "8Gi",
+    "memory_limit": "16Gi",
+    "gpu_count": 0
+  },
+  "autoscaling": {
+    "enabled": true,
+    "min_replicas": 1,
+    "max_replicas": 3,
+    "target_cpu_utilization": 70
+  },
+  "vllm": {
+    "image": "vllm/vllm-openai:latest",
+    "dtype": "auto",
+    "max_model_len": 4096
+  }
+}
+```
+
+### Stop Model
+
+```json
+{
+  "deployment_name": "qwen-small-prod",
+  "k8s_namespace": "miniten-personal",
+  "k8s_deployment_name": "qwen-small-prod-v1",
+  "replicas": 0
+}
+```
+
+### Scale Model
+
+```json
+{
+  "deployment_name": "qwen-small-prod",
+  "k8s_namespace": "miniten-personal",
+  "k8s_deployment_name": "qwen-small-prod-v1",
+  "replicas": 3
+}
+```
+
+## Locking Pattern
+
+Workers should lock jobs atomically so multiple workers do not process the same job.
+
+Example query:
+
+```sql
+WITH next_job AS (
+  SELECT deployment_job_id
+  FROM deployment_jobs
+  WHERE status IN ('queued', 'retrying')
+    AND (locked_at IS NULL OR locked_at < NOW() - INTERVAL '5 minutes')
+  ORDER BY created_at ASC
+  LIMIT 1
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE deployment_jobs
+SET
+  status = 'running',
+  locked_by = $1,
+  locked_at = NOW(),
+  updated_at = NOW()
+WHERE deployment_job_id = (SELECT deployment_job_id FROM next_job)
+RETURNING *;
+```
+
+This allows multiple Deployment Worker instances to safely poll the same table.
+
+## Retry Behavior
+
+If a job fails:
+
+```text
+attempts < max_attempts
+  → mark status = retrying
+  → increment attempts
+  → store last_error
+
+attempts >= max_attempts
+  → mark status = failed
+  → store last_error
+  → update model_deployments.status if needed
+```
+
+## Relationship to Idempotency
+
+`deployment_jobs` should work together with `idempotency_keys`.
+
+Recommended deploy flow:
+
+```text
+Client sends deploy request with Idempotency-Key
+  ↓
+Model Deployments Service checks idempotency_keys
+  ↓
+If new, creates model_deployments row
+  ↓
+Creates deployment_jobs row
+  ↓
+Stores response in idempotency_keys
+  ↓
+Deployment Worker processes the job asynchronously
+```
+
+This prevents duplicate jobs if the client retries the same request.
+
+## Relationship to Model Events
+
+`deployment_jobs` tracks work to be done.
+
+`model_events` tracks what happened.
+
+Example:
+
+```text
+deployment_jobs:
+  deploy_model queued/running/succeeded
+
+model_events:
+  deploy_requested
+  k8s_deployment_created
+  k8s_service_created
+  model_loading
+  model_running
+```
+
+## Important Notes
+
+- This is a durable Postgres-backed queue.
+- It avoids needing Kafka or Redis for the MVP.
+- It should only be used for control-plane operations.
+- It should not be used for synchronous chat/inference requests.
+- A Deployment Worker or Reconciler should be responsible for consuming this table.
+
+
+---
+
 # Indexes
 
 Add indexes for common lookup paths.
@@ -910,6 +1233,21 @@ ON idempotency_keys(project_id, user_id);
 
 CREATE INDEX idx_idempotency_keys_expires_at
 ON idempotency_keys(expires_at);
+
+CREATE INDEX idx_deployment_jobs_status
+ON deployment_jobs(status);
+
+CREATE INDEX idx_deployment_jobs_project_id
+ON deployment_jobs(project_id);
+
+CREATE INDEX idx_deployment_jobs_model_deployment_id
+ON deployment_jobs(model_deployment_id);
+
+CREATE INDEX idx_deployment_jobs_locked_at
+ON deployment_jobs(locked_at);
+
+CREATE INDEX idx_deployment_jobs_created_at
+ON deployment_jobs(created_at);
 ```
 
 ---
@@ -997,6 +1335,36 @@ WHERE project_id = $1
 ```sql
 DELETE FROM idempotency_keys
 WHERE expires_at < NOW();
+```
+
+
+
+## Find queued deployment jobs
+
+```sql
+SELECT *
+FROM deployment_jobs
+WHERE status IN ('queued', 'retrying')
+ORDER BY created_at ASC
+LIMIT 100;
+```
+
+## Find jobs for a deployment
+
+```sql
+SELECT *
+FROM deployment_jobs
+WHERE model_deployment_id = $1
+ORDER BY created_at DESC;
+```
+
+## Find failed jobs
+
+```sql
+SELECT *
+FROM deployment_jobs
+WHERE status = 'failed'
+ORDER BY updated_at DESC;
 ```
 
 
@@ -1248,6 +1616,7 @@ This schema supports the MiniTen MVP features:
 - deployment event history
 - dashboard metrics
 - idempotent control-plane operations
+- asynchronous deployment jobs
 - OpenAI-compatible request routing
 
 The key product rule is:

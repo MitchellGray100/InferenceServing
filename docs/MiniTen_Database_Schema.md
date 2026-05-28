@@ -876,6 +876,10 @@ This table lets MiniTen return quickly from slow control-plane requests while a 
 
 It is also the durable record of deployment commands that were requested, attempted, retried, completed, or failed.
 
+MVP deployment assumption: run exactly one Deployment Worker process/pod.
+Multiple workers are deferred until per-model serialization and
+heartbeat/lease renewal are implemented.
+
 This is useful because model operations can take a long time:
 
 ```text

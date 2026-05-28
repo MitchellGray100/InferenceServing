@@ -37,6 +37,8 @@ RETURNING *;
 SELECT *
 FROM inference_requests
 WHERE model_deployment_id = %(model_deployment_id)s
+  AND (%(status_code)s::integer IS NULL OR status_code = %(status_code)s::integer)
+  AND (%(since)s::timestamp IS NULL OR created_at >= %(since)s::timestamp)
 ORDER BY created_at DESC
 LIMIT %(limit)s;
 
@@ -48,6 +50,7 @@ SELECT
   COUNT(*) FILTER (WHERE status_code >= 200 AND status_code < 400) AS success_count,
   COUNT(*) FILTER (WHERE status_code >= 400) AS error_count,
   AVG(latency_ms)::INTEGER AS average_latency_ms,
+  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)::INTEGER AS p95_latency_ms,
   MAX(created_at) AS last_request_at
 FROM inference_requests
 WHERE model_deployment_id = %(model_deployment_id)s

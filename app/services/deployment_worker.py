@@ -22,6 +22,9 @@ from app.k8s import deployment_manager
 
 queries = load_queries()
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+# TODO: The MVP should run exactly one deployment worker process/pod. Before
+# scaling workers horizontally, add per-model serialization plus heartbeat/lease
+# renewal so slow Kubernetes operations cannot overlap on the same deployment.
 
 SUCCESS_EVENT_TYPES = {
     "deploy_model": "model_running",

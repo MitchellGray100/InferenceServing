@@ -1959,6 +1959,9 @@ GET /v1/projects/{projectID}/analytics/models/qwen-small-prod/requests?limit=50
   "requests": [
     {
       "inferenceRequestID": "392545ef-5fe2-4938-9b95-7a8538ddff8d",
+      "projectID": "07d5ebac-e7b2-4d52-a2f5-0a71ebcb45b7",
+      "modelDeploymentID": "8b6b6830-6f39-4ced-bbef-a3f8dd3e8f87",
+      "apiKeyID": "619cf116-98b0-48f1-8c30-ee22aa726022",
       "status_code": 200,
       "latency_ms": 842,
       "error_type": null,
@@ -1969,6 +1972,9 @@ GET /v1/projects/{projectID}/analytics/models/qwen-small-prod/requests?limit=50
     },
     {
       "inferenceRequestID": "cc089913-453b-4aca-a26b-5043166b20f1",
+      "projectID": "07d5ebac-e7b2-4d52-a2f5-0a71ebcb45b7",
+      "modelDeploymentID": "8b6b6830-6f39-4ced-bbef-a3f8dd3e8f87",
+      "apiKeyID": "619cf116-98b0-48f1-8c30-ee22aa726022",
       "status_code": 409,
       "latency_ms": 12,
       "error_type": "model_stopped",
@@ -2029,6 +2035,8 @@ owner, member, viewer
   "events": [
     {
       "modelEventID": "5084fc13-01bd-48c4-b5b7-df9044a5d2c9",
+      "modelDeploymentID": "8b6b6830-6f39-4ced-bbef-a3f8dd3e8f87",
+      "projectID": "07d5ebac-e7b2-4d52-a2f5-0a71ebcb45b7",
       "event_type": "deploy_requested",
       "message": "Deployment requested for qwen-small-prod",
       "metadata": {
@@ -2038,6 +2046,8 @@ owner, member, viewer
     },
     {
       "modelEventID": "ce8ac720-34ba-42d5-8e30-77b064f07eed",
+      "modelDeploymentID": "8b6b6830-6f39-4ced-bbef-a3f8dd3e8f87",
+      "projectID": "07d5ebac-e7b2-4d52-a2f5-0a71ebcb45b7",
       "event_type": "k8s_deployment_created",
       "message": "Created Kubernetes Deployment qwen-small-prod-v1",
       "metadata": {

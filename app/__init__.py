@@ -10,6 +10,7 @@ from flask import Flask
 from app.config import Config
 from app.routes import (
     api_keys,
+    analytics,
     auth,
     inference,
     model_deployments,
@@ -32,6 +33,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app.register_blueprint(project_members.bp)
     app.register_blueprint(api_keys.bp)
     app.register_blueprint(model_deployments.bp)
+    app.register_blueprint(analytics.bp)
     app.register_blueprint(inference.bp)
 
     return app

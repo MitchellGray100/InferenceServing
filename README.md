@@ -584,6 +584,11 @@ Kubernetes remains the source of truth for live pod and replica state.
 
 `deployment_jobs` stores asynchronous model lifecycle work and the durable history of deployment commands that were requested, attempted, retried, completed, or failed.
 
+MVP deployment assumption: run exactly one Deployment Worker process/pod. The
+queue format already preserves command history and stale-job skipping, but
+horizontal worker scaling should wait until per-model serialization and worker
+heartbeat/lease renewal are implemented.
+
 Job types:
 
 ```text

@@ -380,6 +380,11 @@ Model lifecycle operations can be slow. Deploying a model requires creating Kube
 
 MiniTen uses a Postgres-backed `deployment_jobs` table so the API can return quickly and retain a durable history of deployment commands.
 
+MVP deployment assumption: MiniTen runs exactly one Deployment Worker
+process/pod. Multiple workers should wait until per-model serialization and
+worker heartbeat/lease renewal are implemented, because slow Kubernetes
+operations can otherwise overlap with stale lock recovery.
+
 The Deployment Worker:
 
 - Polls `deployment_jobs`.

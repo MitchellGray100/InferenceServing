@@ -8,7 +8,7 @@ implementation grows.
 from flask import Flask
 
 from app.config import Config
-from app.routes import auth, users
+from app.routes import auth, project_members, projects, users
 from app.utils.errors import register_error_handlers
 
 
@@ -20,5 +20,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     register_error_handlers(app)
     app.register_blueprint(auth.bp)
     app.register_blueprint(users.bp)
+    app.register_blueprint(projects.bp)
+    app.register_blueprint(project_members.bp)
 
     return app

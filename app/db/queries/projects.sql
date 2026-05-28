@@ -72,6 +72,17 @@ WHERE project_id = %(project_id)s
   AND user_id = %(user_id)s
 RETURNING project_member_id, project_id, user_id, role, created_at;
 
+-- name: get_project_member
+SELECT
+  u.user_id,
+  u.email,
+  pm.role,
+  pm.created_at
+FROM project_members pm
+JOIN users u ON u.user_id = pm.user_id
+WHERE pm.project_id = %(project_id)s
+  AND pm.user_id = %(user_id)s;
+
 -- name: remove_project_member
 DELETE FROM project_members
 WHERE project_id = %(project_id)s

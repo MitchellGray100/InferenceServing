@@ -21,6 +21,11 @@ SELECT user_id, email, hashed_password, created_at, last_login_at
 FROM users
 WHERE email = %(email)s;
 
+-- name: get_user_by_email
+SELECT user_id, email, created_at, last_login_at
+FROM users
+WHERE email = %(email)s;
+
 -- name: update_user_last_login
 UPDATE users
 SET last_login_at = CURRENT_TIMESTAMP

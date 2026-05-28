@@ -1,7 +1,7 @@
 # Inference Serving (MiniTen)
 
-<img width="1112" height="362" alt="image" src="https://github.com/user-attachments/assets/8e06f9a5-c1fb-4f04-98ef-d271c724a9b8" />
-<img width="2211" height="1171" alt="image" src="https://github.com/user-attachments/assets/f6f7ab21-b39f-49b1-9acb-072912177f96" />
+<img width="1112" height="362" alt="MiniTen logo" src="docs/miniten%20logo.png" />
+<img width="2211" height="1171" alt="MiniTen system design diagram" src="docs/MiniTen%20System%20Design.png" />
 
 MiniTen is a planned multi-user inference serving platform for deploying open-source Hugging Face LLMs as named vLLM workers on Kubernetes.
 
@@ -774,6 +774,8 @@ migrations/
 scripts/
 examples/
 docs/
+  miniten logo.png
+  MiniTen System Design.png
   MiniTen_System_Design.md
   MiniTen_API_Endpoint_Design.md
   MiniTen_Database_Schema.md

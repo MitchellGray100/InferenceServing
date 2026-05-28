@@ -56,6 +56,16 @@ def test_load_migrations_returns_sorted_checksummed_files(tmp_path) -> None:
     assert all(len(item.checksum) == 64 for item in migrations)
 
 
+def test_schema_enforces_and_names_unique_api_key_hash() -> None:
+    """Regression test for the DB-level duplicate API key guard."""
+    schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CONSTRAINT uq_api_keys_key_hash UNIQUE(key_hash)" in schema
+    assert "CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)" in schema
+
+
 def test_get_applied_migrations_creates_table_and_returns_mapping() -> None:
     conn = FakeMigrationConnection(fetchall=[("001.sql", "abc")])
 

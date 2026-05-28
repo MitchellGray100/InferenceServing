@@ -420,7 +420,7 @@ CREATE TABLE api_keys (
   key_prefix TEXT NOT NULL,
 
   -- Server-secret HMAC of the full API key. Never store the raw key.
-  key_hash TEXT NOT NULL UNIQUE,
+  key_hash TEXT NOT NULL,
 
   created_by_user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
 
@@ -428,7 +428,8 @@ CREATE TABLE api_keys (
   last_used_at TIMESTAMP,
   revoked_at TIMESTAMP,
 
-  UNIQUE(project_id, name)
+  CONSTRAINT uq_api_keys_key_hash UNIQUE(key_hash),
+  CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)
 );
 ```
 
@@ -1469,7 +1470,7 @@ CREATE TABLE api_keys (
 
   name TEXT NOT NULL,
   key_prefix TEXT NOT NULL,
-  key_hash TEXT NOT NULL UNIQUE,
+  key_hash TEXT NOT NULL,
 
   created_by_user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
 
@@ -1477,7 +1478,8 @@ CREATE TABLE api_keys (
   last_used_at TIMESTAMP,
   revoked_at TIMESTAMP,
 
-  UNIQUE(project_id, name)
+  CONSTRAINT uq_api_keys_key_hash UNIQUE(key_hash),
+  CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)
 );
 
 CREATE TABLE inference_requests (

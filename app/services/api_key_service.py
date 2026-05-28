@@ -25,6 +25,9 @@ from app.utils.validation import validate_api_key_name, validate_uuid
 # API key queries intentionally never return `key_hash` except on the dedicated
 # verification lookup. List/create/revoke responses expose metadata only.
 queries = load_queries()
+API_KEY_HASH_UNIQUE_CONSTRAINT = "uq_api_keys_key_hash"
+API_KEY_NAME_UNIQUE_CONSTRAINT = "uq_api_keys_project_name"
+MAX_API_KEY_CREATE_ATTEMPTS = 3
 
 
 def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
@@ -40,38 +43,67 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
     canonical_project_id = validate_uuid(project_id, "projectID")
     key_name = validate_api_key_name(name)
 
-    # Generate the raw key once. Only the visible prefix and HMAC are persisted.
-    raw_key, key_prefix = api_keys.generate_api_key()
-    key_hash = api_keys.hash_api_key(raw_key)
+    row = None
+    raw_key = None
 
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            # Project membership is checked in the same transaction as key
-            # creation so permission and insert cannot drift apart.
-            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
-            require_role(role, WRITE_ROLES)
+    for attempt in range(MAX_API_KEY_CREATE_ATTEMPTS):
+        # Generate a new raw key for each attempt. Only the visible prefix and
+        # HMAC are persisted; the raw key is returned only after the insert wins.
+        raw_key, key_prefix = api_keys.generate_api_key()
+        key_hash = api_keys.hash_api_key(raw_key)
 
-            try:
-                cur.execute(
-                    queries.get("create_api_key"),
-                    {
-                        "project_id": canonical_project_id,
-                        "name": key_name,
-                        "key_prefix": key_prefix,
-                        "key_hash": key_hash,
-                        "created_by_user_id": canonical_user_id,
-                    },
-                )
-            except Exception as exc:
-                if _is_unique_violation(exc):
-                    raise ApiError(
-                        type="validation_error",
-                        message="An API key with that name already exists.",
-                        status_code=409,
-                    ) from exc
-                raise
+        try:
+            with transaction() as conn:
+                with conn.cursor() as cur:
+                    # Project membership is checked in the same transaction as key
+                    # creation so permission and insert cannot drift apart.
+                    role = get_project_role_with_cursor(
+                        cur,
+                        canonical_project_id,
+                        canonical_user_id,
+                    )
+                    require_role(role, WRITE_ROLES)
 
-            row = cur.fetchone()
+                    cur.execute(
+                        queries.get("create_api_key"),
+                        {
+                            "project_id": canonical_project_id,
+                            "name": key_name,
+                            "key_prefix": key_prefix,
+                            "key_hash": key_hash,
+                            "created_by_user_id": canonical_user_id,
+                        },
+                    )
+
+                    row = cur.fetchone()
+                    break
+        except Exception as exc:
+            if _is_unique_violation(exc, API_KEY_NAME_UNIQUE_CONSTRAINT):
+                raise ApiError(
+                    type="validation_error",
+                    message="An API key with that name already exists.",
+                    status_code=409,
+                ) from exc
+
+            if _is_unique_violation(exc, API_KEY_HASH_UNIQUE_CONSTRAINT):
+                if attempt < MAX_API_KEY_CREATE_ATTEMPTS - 1:
+                    continue
+
+                raise ApiError(
+                    type="api_key_generation_failed",
+                    message="Could not generate a unique API key. Please try again.",
+                    status_code=500,
+                ) from exc
+
+            raise
+
+    if row is None or raw_key is None:
+        raise ApiError(
+            type="api_key_generation_failed",
+            message="Could not generate a unique API key. Please try again.",
+            status_code=500,
+        )
+
 
     response = serialize_api_key(row)
 
@@ -196,6 +228,18 @@ def _optional_iso8601(value: Any) -> str | None:
     return to_iso8601(value) if value is not None else None
 
 
-def _is_unique_violation(exc: Exception) -> bool:
+def _constraint_name(exc: Exception) -> str | None:
+    """Return a database constraint name from a psycopg-style exception."""
+    diag = getattr(exc, "diag", None)
+    return getattr(diag, "constraint_name", None)
+
+
+def _is_unique_violation(exc: Exception, constraint_name: str | None = None) -> bool:
     """Detect psycopg unique violations without importing psycopg globally."""
-    return exc.__class__.__name__ == "UniqueViolation"
+    if exc.__class__.__name__ != "UniqueViolation":
+        return False
+
+    if constraint_name is None:
+        return True
+
+    return _constraint_name(exc) == constraint_name

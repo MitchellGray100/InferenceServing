@@ -384,7 +384,7 @@ def test_api_key_service_unique_and_not_found_branches(monkeypatch, app) -> None
             {"role": "member"},
             None,
         ],
-        execute_errors=[None, UniqueViolation()],
+        execute_errors=[None, UniqueViolation("uq_api_keys_project_name")],
     )
     monkeypatch.setattr(api_key_service, "transaction", fake.transaction)
     monkeypatch.setattr(
@@ -406,6 +406,79 @@ def test_api_key_service_unique_and_not_found_branches(monkeypatch, app) -> None
 
     assert duplicate.value.status_code == 409
     assert missing.value.type == "api_key_not_found"
+
+
+def test_api_key_service_retries_generated_key_hash_collision(monkeypatch, app) -> None:
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "member"},
+            {"role": "member"},
+            api_key_row(key_prefix="mt_live_second", key_hash="sha256:second"),
+        ],
+        execute_errors=[
+            None,
+            UniqueViolation("uq_api_keys_key_hash"),
+            None,
+            None,
+        ],
+    )
+    generated_keys = iter(
+        [
+            ("mt_live_first_secret", "mt_live_first"),
+            ("mt_live_second_secret", "mt_live_second"),
+        ]
+    )
+    monkeypatch.setattr(api_key_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        api_key_service.api_keys,
+        "generate_api_key",
+        lambda: next(generated_keys),
+    )
+    monkeypatch.setattr(
+        api_key_service.api_keys,
+        "hash_api_key",
+        lambda raw_key: f"sha256:{raw_key}",
+    )
+
+    with app.app_context():
+        created = api_key_service.create_api_key(USER_ID, PROJECT_ID, "Production")
+
+    assert created["api_key"] == "mt_live_second_secret"
+    assert fake.cursor.executed[1][1]["key_hash"] == "sha256:mt_live_first_secret"
+    assert fake.cursor.executed[3][1]["key_hash"] == "sha256:mt_live_second_secret"
+
+
+def test_api_key_service_fails_after_repeated_generated_key_hash_collisions(
+    monkeypatch,
+    app,
+) -> None:
+    fake = FakeTransaction(
+        fetchones=[{"role": "member"}, {"role": "member"}, {"role": "member"}],
+        execute_errors=[
+            None,
+            UniqueViolation("uq_api_keys_key_hash"),
+            None,
+            UniqueViolation("uq_api_keys_key_hash"),
+            None,
+            UniqueViolation("uq_api_keys_key_hash"),
+        ],
+    )
+    monkeypatch.setattr(api_key_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        api_key_service.api_keys,
+        "generate_api_key",
+        lambda: ("mt_live_visible_secret", "mt_live_visible"),
+    )
+    monkeypatch.setattr(
+        api_key_service.api_keys,
+        "hash_api_key",
+        lambda raw_key: "sha256:hash",
+    )
+
+    with app.app_context(), pytest.raises(ApiError) as error:
+        api_key_service.create_api_key(USER_ID, PROJECT_ID, "Production")
+
+    assert error.value.type == "api_key_generation_failed"
 
 
 def test_api_key_service_authenticate_project_api_key(monkeypatch, app) -> None:
@@ -551,8 +624,15 @@ def test_model_deployment_service_error_branches(monkeypatch, app) -> None:
     assert lifecycle_missing.value.type == "model_deployment_not_found"
 
 
+class FakeDiag:
+    def __init__(self, constraint_name=None):
+        self.constraint_name = constraint_name
+
+
 class UniqueViolation(Exception):
-    pass
+    def __init__(self, constraint_name=None):
+        super().__init__(constraint_name)
+        self.diag = FakeDiag(constraint_name)
 
 
 class FakeCursor:

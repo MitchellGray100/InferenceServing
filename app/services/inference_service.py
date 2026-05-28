@@ -32,6 +32,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
     data = require_json_object(body)
     model_name = validate_string(require_field(data, "model"), "model")
 
+    # TODO: Support streaming
     # Streaming requires a different HTTP response shape and connection
     # handling, so the first MVP pass rejects it explicitly.
     if data.get("stream") is True:

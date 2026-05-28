@@ -104,7 +104,7 @@ CREATE TABLE api_keys (
 
   name TEXT NOT NULL,
   key_prefix TEXT NOT NULL,
-  key_hash TEXT NOT NULL UNIQUE,
+  key_hash TEXT NOT NULL,
 
   created_by_user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
 
@@ -112,7 +112,8 @@ CREATE TABLE api_keys (
   last_used_at TIMESTAMP,
   revoked_at TIMESTAMP,
 
-  UNIQUE(project_id, name)
+  CONSTRAINT uq_api_keys_key_hash UNIQUE(key_hash),
+  CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)
 );
 
 -- Lightweight inference request metadata for analytics and debugging. Prompts

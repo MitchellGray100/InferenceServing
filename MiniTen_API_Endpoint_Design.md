@@ -275,7 +275,7 @@ users
 ## 1.3 Delete user
 
 ```http
-DELETE /v1/users/{userID}
+DELETE /v1/users/me
 ```
 
 ### Purpose
@@ -297,7 +297,7 @@ User auth token required.
 For MVP:
 
 ```text
-Users can only delete their own account.
+Users can only delete their own account. The user is resolved from the auth token.
 ```
 
 ### Behavior
@@ -1196,6 +1196,14 @@ owner, member
   }
 }
 ```
+
+### Autoscaling Storage Rule
+
+Autoscaling is supported in the MVP.
+
+MiniTen uses a shared PVC-backed Hugging Face cache by default. When autoscaling creates more than one replica for a deployment, the configured storage class must support mounting that cache across replicas with a compatible access mode such as `ReadWriteMany`.
+
+If the local or cloud cluster does not support a compatible shared volume mode, the deployment may still run with one replica, but multi-replica autoscaling with a shared cache is not guaranteed.
 
 ### Behavior
 
@@ -2343,7 +2351,7 @@ kubernetes_error
 ```http
 POST   /v1/users
 GET    /v1/users/me
-DELETE /v1/users/{userID}
+DELETE /v1/users/me
 ```
 
 ## Auth

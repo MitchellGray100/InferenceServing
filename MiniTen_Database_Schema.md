@@ -379,6 +379,7 @@ Mapping:
 - `name` is the API-facing model identifier.
 - `model_id` is not unique.
 - `UNIQUE(project_id, name)` is required.
+- Autoscaling is supported in the MVP. If a deployment uses a shared PVC-backed Hugging Face cache with more than one replica, the cluster storage class must support a compatible shared access mode such as `ReadWriteMany`.
 - The OpenAI-compatible request uses the deployment name:
 
 ```json

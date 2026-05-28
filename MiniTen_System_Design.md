@@ -270,6 +270,8 @@ K8s PVC: qwen-small-prod-hf-cache
 K8s HPA: qwen-small-prod-v1
 ```
 
+For the MVP, `v1` is a fixed internal Kubernetes resource suffix for the deployment generation. It is not a user-facing versioning, rollback, or promotion system.
+
 ---
 
 ## 5.4 vLLM Workers
@@ -784,9 +786,11 @@ Pods load model
 Kubernetes Service load-balances traffic across ready pods
 ```
 
-Caveat:
+MVP storage rule:
 
-Sharing one PVC across multiple replicas may require a storage class with compatible access mode, such as ReadWriteMany. For MVP and local development, PVC caching still helps with restarts and single-node deployments.
+MiniTen uses a shared PVC-backed Hugging Face cache by default. When autoscaling creates more than one replica for a deployment, the configured storage class must support mounting that cache across replicas with a compatible access mode such as `ReadWriteMany`.
+
+If the local or cloud cluster does not support a compatible shared volume mode, the deployment may still run with one replica, but multi-replica autoscaling with a shared cache is not guaranteed.
 
 ---
 
@@ -950,6 +954,8 @@ Deployment name: qwen-small-prod
 Model ID: Qwen/Qwen2.5-0.5B-Instruct
 Version: v1
 ```
+
+For the MVP, `v1` is a fixed internal Kubernetes resource suffix for the deployment generation. It is not a user-facing versioning, rollback, or promotion system.
 
 Create:
 

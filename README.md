@@ -435,6 +435,8 @@ Model ID: Qwen/Qwen2.5-0.5B-Instruct
 Version: v1
 ```
 
+For the MVP, `v1` is a fixed internal Kubernetes resource suffix for the deployment generation. It is not a user-facing versioning, rollback, or promotion system.
+
 MiniTen creates:
 
 ```text
@@ -540,7 +542,11 @@ Pods load model
 Kubernetes Service load-balances traffic across ready pods
 ```
 
-PVC sharing across replicas may require a compatible storage access mode such as `ReadWriteMany`.
+Autoscaling is supported in the MVP.
+
+MiniTen uses a shared PVC-backed Hugging Face cache by default. When autoscaling creates more than one replica for a deployment, the configured storage class must support mounting that cache across replicas with a compatible access mode such as `ReadWriteMany`.
+
+If the local or cloud cluster does not support a compatible shared volume mode, the deployment may still run with one replica, but multi-replica autoscaling with a shared cache is not guaranteed.
 
 ---
 

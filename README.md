@@ -709,9 +709,6 @@ README.md
 docker-compose.yml
 Dockerfile
 requirements.txt
-MiniTen_System_Design.md
-MiniTen_API_Endpoint_Design.md
-MiniTen_Database_Schema.md
 
 app/
   __init__.py
@@ -777,6 +774,9 @@ migrations/
 scripts/
 examples/
 docs/
+  MiniTen_System_Design.md
+  MiniTen_API_Endpoint_Design.md
+  MiniTen_Database_Schema.md
 tests/
 ```
 

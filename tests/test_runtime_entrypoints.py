@@ -1,12 +1,14 @@
 """Runtime entrypoint tests."""
 
 import signal
+import subprocess
 
 from flask import Flask
 
 import wsgi
 from app import main as app_main
 from app.services import deployment_worker
+from scripts import kind_env
 
 
 def test_wsgi_exposes_flask_app() -> None:
@@ -128,6 +130,42 @@ def test_worker_main_wires_logging_signal_and_loop(monkeypatch) -> None:
     deployment_worker.main()
 
     assert calls == ["logging", "event", ("run", True)]
+
+
+def test_kind_env_exports_docker_kubeconfig(monkeypatch, tmp_path) -> None:
+    """kind kubeconfig is exported unchanged for host-networked Compose workers."""
+    kube_dir = tmp_path / "kube"
+    monkeypatch.setattr(kind_env, "LOCAL_KUBE_DIR", kube_dir)
+    monkeypatch.setattr(kind_env, "LOCAL_KUBECONFIG", kube_dir / "config")
+
+    def fake_run(args, capture=False):
+        assert args == ["kind", "get", "kubeconfig", "--name", "miniten"]
+        assert capture is True
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="clusters:\n- cluster:\n    server: https://127.0.0.1:12345\n",
+        )
+
+    monkeypatch.setattr(kind_env, "run", fake_run)
+
+    kind_env.export_docker_kubeconfig("miniten")
+
+    assert "server: https://127.0.0.1:12345" in (
+        kube_dir / "config"
+    ).read_text(encoding="utf-8")
+
+
+def test_kind_env_delete_skips_missing_kind(monkeypatch, tmp_path) -> None:
+    """Cleanup should still remove generated kubeconfig if kind is unavailable."""
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(kind_env, "LOCAL_KUBECONFIG", kubeconfig)
+    monkeypatch.setattr(kind_env.shutil, "which", lambda name: None)
+
+    kind_env.delete_kind_environment("miniten")
+
+    assert kubeconfig.exists() is False
 
 
 class FakeStopEvent:

@@ -401,9 +401,12 @@ Local development starts the worker during `make setup-env` with
 `deployment_jobs`, checks `desired_generation`, updates `model_deployments`,
 marks jobs `succeeded`/`skipped`/`failed`, and writes `model_events`, but it
 does not call the Kubernetes API. This lets local smoke tests verify the
-control-plane queue without requiring a live Kubernetes cluster. Real local
-Kubernetes runs can set `WORKER_DRY_RUN=false` and provide `KUBECONFIG_DIR` to
-the Docker Compose worker.
+control-plane queue without mutating Kubernetes. `make setup-env` also creates
+or reuses a local `kind` cluster named `miniten` and writes a Docker-friendly
+kubeconfig to `.local/kube/config`. The Compose worker uses host networking so
+kind's localhost API endpoint still matches its TLS certificate. Real local
+Kubernetes runs use `make test-local-k8s`, which switches the Compose worker to
+`WORKER_DRY_RUN=false` before deploying a smoke-test model.
 
 The Deployment Worker:
 
@@ -412,6 +415,8 @@ The Deployment Worker:
 - Compares job `desired_generation` with the current model deployment generation.
 - Marks stale jobs `skipped` without changing Kubernetes.
 - Calls the Kubernetes API.
+- Waits for Kubernetes readiness before marking deploy/start/scale jobs successful.
+- Detects pod scheduling, pod readiness, Service existence, Deployment availability, and common failed pod states such as image pull and crash-loop errors.
 - Updates `model_deployments`.
 - Writes `model_events`.
 - Retries failed jobs when appropriate.

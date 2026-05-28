@@ -191,6 +191,11 @@ def run_smoke_tests(base_url: str) -> None:
     )
     client.request(
         "GET",
+        f"/v1/projects/{project_id}/analytics/overview",
+        token=owner_token,
+    )
+    client.request(
+        "GET",
         f"/v1/projects/{project_id}/analytics/models/{model_name}/metrics",
         token=owner_token,
     )

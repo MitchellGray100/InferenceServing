@@ -1,11 +1,13 @@
 """Model deployment route and service helper tests."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
 
 from app import create_app
 from app.security.tokens import create_access_token
+from app.services import model_deployment_service
 from app.services.model_deployment_service import (
     build_job_payload,
     build_k8s_names,
@@ -192,6 +194,60 @@ def test_list_model_deployment_jobs_route(monkeypatch, client, auth_headers) -> 
 
     assert response.status_code == 200
     assert response.get_json() == expected
+
+
+def test_list_model_logs_route(monkeypatch, client, auth_headers) -> None:
+    expected = {"model": model_deployment_response(), "logs": [{"pod": "pod-a", "text": "ok"}]}
+
+    def list_model_logs(user_id, project_id, model_name, tail):
+        assert user_id == USER_ID
+        assert project_id == PROJECT_ID
+        assert model_name == "qwen-small-prod"
+        assert tail == "25"
+        return expected
+
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service.list_model_logs",
+        list_model_logs,
+    )
+
+    response = client.get(
+        f"/v1/projects/{PROJECT_ID}/models/qwen-small-prod/logs?tail=25",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected
+
+
+def test_list_model_logs_service(monkeypatch) -> None:
+    fake = FakeTransaction(fetchones=[{"role": "viewer"}, deployment_row_fixture()])
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        model_deployment_service.k8s_client,
+        "create_clients",
+        lambda: "clients",
+    )
+    monkeypatch.setattr(
+        model_deployment_service.deployment_manager,
+        "read_model_logs",
+        lambda clients, deployment, tail_lines: [{"pod": "pod-a", "text": "ok"}],
+    )
+
+    response = model_deployment_service.list_model_logs(
+        USER_ID,
+        PROJECT_ID,
+        "qwen-small-prod",
+        tail="25",
+    )
+
+    assert response["logs"] == [{"pod": "pod-a", "text": "ok"}]
+    assert fake.cursor.executed[-1][1]["name"] == "qwen-small-prod"
+
+
+def test_parse_log_tail_rejects_bad_values() -> None:
+    with pytest.raises(ApiError):
+        model_deployment_service.parse_log_tail("1001")
 
 
 @pytest.mark.parametrize(
@@ -398,3 +454,33 @@ def deployment_row_fixture() -> dict[str, object]:
         "updated_at": datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
         "deleted_at": None,
     }
+
+
+class FakeCursor:
+    def __init__(self, *, fetchones=None):
+        self.fetchones = list(fetchones or [])
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def fetchone(self):
+        return self.fetchones.pop(0) if self.fetchones else None
+
+
+class FakeConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @contextmanager
+    def cursor(self):
+        yield self._cursor
+
+
+class FakeTransaction:
+    def __init__(self, *, fetchones=None):
+        self.cursor = FakeCursor(fetchones=fetchones)
+
+    @contextmanager
+    def transaction(self):
+        yield FakeConnection(self.cursor)

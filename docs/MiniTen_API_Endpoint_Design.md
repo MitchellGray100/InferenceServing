@@ -1878,12 +1878,15 @@ GET /v1/projects/{projectID}/models/qwen-small-prod/logs?tail=200
 
 ```json
 {
-  "model": "qwen-small-prod",
+  "model": {
+    "modelDeploymentID": "7a16ad8b-3d7d-4dd3-9a63-c4e3bbf29c18",
+    "name": "qwen-small-prod",
+    "status": "running"
+  },
   "logs": [
     {
       "pod": "qwen-small-prod-v1-abc123",
-      "line": "INFO vLLM server started",
-      "timestamp": "2026-05-17T12:00:00Z"
+      "text": "INFO vLLM server started\nINFO model ready"
     }
   ]
 }

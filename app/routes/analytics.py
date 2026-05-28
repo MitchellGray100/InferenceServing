@@ -17,6 +17,17 @@ from app.services import analytics_service
 bp = Blueprint("analytics", __name__, url_prefix="/v1/projects")
 
 
+@bp.get("/<project_id>/analytics/overview")
+@require_user_auth
+def get_project_overview(project_id: str) -> tuple[object, int]:
+    """Return project-level analytics summary across all models."""
+    response = analytics_service.get_project_overview(
+        user_id=current_user_id(),
+        project_id=project_id,
+    )
+    return jsonify(response), 200
+
+
 @bp.get("/<project_id>/analytics/models/<model_name>/metrics")
 @require_user_auth
 def get_model_metrics(project_id: str, model_name: str) -> tuple[object, int]:

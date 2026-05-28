@@ -719,7 +719,9 @@ make migrate
 make run-api
 make run-worker
 make run-worker-dry-run
+make start-worker-real-k8s
 make test-local-apis
+make test-local-k8s
 make lint
 make tests
 make compile
@@ -727,9 +729,12 @@ make clean
 ```
 
 `make setup-env` installs Python dependencies, starts local Postgres through
-Docker Compose, waits for it to accept connections, applies migrations, and
-starts the local Deployment Worker in dry-run mode.
-`make clean-env` stops Compose services and removes the local Postgres volume.
+Docker Compose, waits for it to accept connections, applies migrations,
+creates or reuses a local `kind` cluster named `miniten`, writes a Docker
+Compose kubeconfig to `.local/kube/config`, and starts the local Deployment
+Worker in dry-run mode.
+`make clean-env` stops Compose services, removes the local Postgres volume,
+deletes the `kind` cluster, and removes the local setup marker.
 `make test-local-apis` runs HTTP smoke tests against a running local API, so
 start `make run-api` in another terminal first. The smoke test waits for
 `GET /readyz` before exercising authenticated endpoints, then verifies queued
@@ -759,9 +764,36 @@ mutating a Kubernetes cluster. `make run-worker` uses the real Kubernetes
 client, and `make run-worker-dry-run` runs a foreground dry-run worker when you
 want to inspect worker logs directly.
 
-For a Docker Compose worker that mutates a real local kind/minikube cluster, set
-`WORKER_DRY_RUN=false` and point `KUBECONFIG_DIR` at the host kubeconfig
-directory before starting the worker.
+The setup script requires Docker, `kind`, and `kubectl` on PATH. On Windows,
+install the Kubernetes tools with:
+
+```powershell
+winget install --id Kubernetes.kind --exact
+winget install --id Kubernetes.kubectl --exact
+```
+
+For a Docker Compose worker that mutates the real local `kind` cluster, run
+`make start-worker-real-k8s`. That command refreshes `.local/kube/config` and
+restarts the worker with `WORKER_DRY_RUN=false`. The worker container uses host
+networking so kind's localhost API endpoint still matches its TLS certificate.
+
+Real local Kubernetes smoke workflow:
+
+```bash
+make setup-env
+make run-api
+make test-local-k8s
+```
+
+`make test-local-k8s` automatically switches the worker into real Kubernetes
+mode, deploys a lightweight smoke-test container, waits for the worker to
+verify Kubernetes readiness, checks Namespace/PVC/Deployment/Service/HPA
+creation, calls the model logs endpoint, deletes the model, and verifies
+runtime resources are removed. If `HUGGING_FACE_TOKEN` is set, the worker also
+creates and deletes the per-model Secret. This test intentionally avoids
+pulling the full `vllm/vllm-openai` image; production-like model loading can be
+tested separately by overriding `MINITEN_K8S_TEST_MODEL_ID` and
+`K8S_SMOKE_TEST_IMAGE`.
 
 Logging is controlled with `LOG_LEVEL`, defaulting to `INFO`. Use `DEBUG` when
 you need lower-level SQL/Kubernetes/auth diagnostics. Logs intentionally avoid

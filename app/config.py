@@ -39,6 +39,11 @@ class Config:
         os.getenv("DEFAULT_HPA_TARGET_CPU_UTILIZATION", "70")
     )
     DEFAULT_PVC_SIZE = os.getenv("DEFAULT_PVC_SIZE", "20Gi")
+    HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
+    K8S_SMOKE_TEST_IMAGE = os.getenv(
+        "K8S_SMOKE_TEST_IMAGE",
+        "hashicorp/http-echo:1.0",
+    )
 
     # HTTP timeout for synchronous proxy calls from Flask to vLLM.
     INFERENCE_UPSTREAM_TIMEOUT_SECONDS = int(
@@ -52,6 +57,12 @@ class Config:
     WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "2"))
     WORKER_POLL_INTERVAL_SECONDS = float(
         os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2.0")
+    )
+    WORKER_READINESS_TIMEOUT_SECONDS = float(
+        os.getenv("WORKER_READINESS_TIMEOUT_SECONDS", "600")
+    )
+    WORKER_READINESS_POLL_INTERVAL_SECONDS = float(
+        os.getenv("WORKER_READINESS_POLL_INTERVAL_SECONDS", "5.0")
     )
     WORKER_DRY_RUN = os.getenv("WORKER_DRY_RUN", "false").lower() in {
         "1",

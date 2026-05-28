@@ -39,14 +39,17 @@ services:
     # MVP: run exactly one deployment worker process. Do not scale this service
     # until per-model worker serialization and lease renewal are implemented.
     build: .
+    network_mode: host
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: postgresql://miniten:miniten@postgres:5432/miniten
+      DATABASE_URL: postgresql://miniten:miniten@127.0.0.1:5432/miniten
       SECRET_KEY: dev-secret-key-change-me-32-bytes
       API_KEY_HASH_SECRET: dev-api-key-hash-secret-change-me-32-bytes
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2.0}
       WORKER_DRY_RUN: ${WORKER_DRY_RUN:-false}
+      K8S_SMOKE_TEST_IMAGE: ${K8S_SMOKE_TEST_IMAGE:-hashicorp/http-echo:1.0}
+      HUGGING_FACE_TOKEN: ${HUGGING_FACE_TOKEN:-}
       KUBECONFIG: /root/.kube/config
       LOG_LEVEL: INFO
     volumes:

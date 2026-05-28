@@ -250,6 +250,9 @@ def build_vllm_container(
     secret_name: str | None = None,
 ) -> dict[str, Any]:
     """Build the single vLLM container spec for a Deployment."""
+    if deployment["vllm_image"] == Config.K8S_SMOKE_TEST_IMAGE:
+        return build_smoke_test_container(deployment, pvc_name=pvc_name)
+
     # vLLM exposes an OpenAI-compatible HTTP server. The deployment name is the
     # served model name clients use in `/v1/chat/completions`.
     container = {
@@ -317,6 +320,54 @@ def build_vllm_container(
         )
 
     return container
+
+
+def build_smoke_test_container(
+    deployment: dict[str, Any],
+    *,
+    pvc_name: str,
+) -> dict[str, Any]:
+    """Build a tiny HTTP container for local Kubernetes smoke tests.
+
+    Real model deployments use the vLLM container above. The smoke container is
+    intentionally limited to the configured `K8S_SMOKE_TEST_IMAGE` so local
+    cluster tests can validate Namespace/PVC/Deployment/Service/HPA/log plumbing
+    without pulling or loading a large vLLM image.
+    """
+    return {
+        "name": "vllm",
+        "image": deployment["vllm_image"],
+        "imagePullPolicy": "IfNotPresent",
+        "args": ["-listen=:8000", "-text=ok"],
+        "ports": [
+            {
+                "name": VLLM_PORT_NAME,
+                "containerPort": VLLM_PORT,
+            }
+        ],
+        "env": [
+            {
+                "name": "HF_HOME",
+                "value": HF_CACHE_MOUNT_PATH,
+            }
+        ],
+        "resources": build_resource_requirements(deployment),
+        "volumeMounts": [
+            {
+                "name": "hf-cache",
+                "mountPath": HF_CACHE_MOUNT_PATH,
+            }
+        ],
+        "readinessProbe": {
+            "httpGet": {
+                "path": "/health",
+                "port": VLLM_PORT_NAME,
+            },
+            "initialDelaySeconds": 1,
+            "periodSeconds": 2,
+            "failureThreshold": 15,
+        },
+    }
 
 
 def build_resource_requirements(deployment: dict[str, Any]) -> dict[str, Any]:

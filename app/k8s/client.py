@@ -142,6 +142,81 @@ def apply_hpa(clients: KubernetesClients, manifest: dict[str, Any]) -> Any:
     )
 
 
+def read_deployment(clients: KubernetesClients, namespace: str, name: str) -> Any:
+    """Read a Deployment by namespace/name."""
+    logger.debug("Reading Kubernetes Deployment namespace=%s name=%s.", namespace, name)
+    return clients.apps.read_namespaced_deployment(name, namespace)
+
+
+def read_service(clients: KubernetesClients, namespace: str, name: str) -> Any:
+    """Read a Service by namespace/name."""
+    logger.debug("Reading Kubernetes Service namespace=%s name=%s.", namespace, name)
+    return clients.core.read_namespaced_service(name, namespace)
+
+
+def read_hpa(clients: KubernetesClients, namespace: str, name: str) -> Any:
+    """Read an HPA by namespace/name."""
+    logger.debug("Reading Kubernetes HPA namespace=%s name=%s.", namespace, name)
+    return clients.autoscaling.read_namespaced_horizontal_pod_autoscaler(
+        name,
+        namespace,
+    )
+
+
+def read_pvc(clients: KubernetesClients, namespace: str, name: str) -> Any:
+    """Read a PersistentVolumeClaim by namespace/name."""
+    logger.debug("Reading Kubernetes PVC namespace=%s name=%s.", namespace, name)
+    return clients.core.read_namespaced_persistent_volume_claim(name, namespace)
+
+
+def read_secret(clients: KubernetesClients, namespace: str, name: str) -> Any:
+    """Read a Secret by namespace/name."""
+    logger.debug("Reading Kubernetes Secret namespace=%s name=%s.", namespace, name)
+    return clients.core.read_namespaced_secret(name, namespace)
+
+
+def list_pods(
+    clients: KubernetesClients,
+    namespace: str,
+    *,
+    label_selector: str,
+) -> list[Any]:
+    """List pods in a namespace matching a Kubernetes label selector."""
+    logger.debug(
+        "Listing Kubernetes Pods namespace=%s label_selector=%s.",
+        namespace,
+        label_selector,
+    )
+    response = clients.core.list_namespaced_pod(
+        namespace,
+        label_selector=label_selector,
+    )
+    return list(getattr(response, "items", []) or [])
+
+
+def read_pod_log(
+    clients: KubernetesClients,
+    namespace: str,
+    pod_name: str,
+    *,
+    tail_lines: int,
+    timeout_seconds: int = 5,
+) -> str:
+    """Read recent logs for one pod."""
+    logger.debug(
+        "Reading Kubernetes Pod logs namespace=%s pod=%s tail_lines=%s.",
+        namespace,
+        pod_name,
+        tail_lines,
+    )
+    return clients.core.read_namespaced_pod_log(
+        pod_name,
+        namespace,
+        tail_lines=tail_lines,
+        _request_timeout=timeout_seconds,
+    )
+
+
 def delete_deployment(clients: KubernetesClients, namespace: str, name: str) -> Any:
     """Delete a Deployment and ignore already-deleted resources."""
     logger.debug("Deleting Kubernetes Deployment namespace=%s name=%s.", namespace, name)

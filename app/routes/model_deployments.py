@@ -84,6 +84,19 @@ def list_model_deployment_jobs(
     return jsonify(response), 200
 
 
+@bp.get("/<project_id>/models/<model_name>/logs")
+@require_user_auth
+def list_model_logs(project_id: str, model_name: str) -> tuple[object, int]:
+    """Return recent Kubernetes pod logs for one project-local model name."""
+    response = model_deployment_service.list_model_logs(
+        current_user_id(),
+        project_id,
+        model_name,
+        tail=request.args.get("tail"),
+    )
+    return jsonify(response), 200
+
+
 @bp.post("/<project_id>/models/<model_deployment_id>/start")
 @require_user_auth
 def start_model_deployment(

@@ -186,11 +186,19 @@ def dispatch_job(
         return
 
     if job_type == "deploy_model":
-        deployment_manager.apply_model_deployment(clients, deployment)
+        deployment_manager.apply_model_deployment(
+            clients,
+            deployment,
+            hugging_face_token=Config.HUGGING_FACE_TOKEN,
+        )
         return
 
     if job_type == "start_model":
-        deployment_manager.apply_model_deployment(clients, deployment)
+        deployment_manager.apply_model_deployment(
+            clients,
+            deployment,
+            hugging_face_token=Config.HUGGING_FACE_TOKEN,
+        )
         return
 
     if job_type == "stop_model":

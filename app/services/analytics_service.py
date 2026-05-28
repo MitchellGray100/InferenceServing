@@ -82,6 +82,33 @@ def get_model_metrics(
     }
 
 
+def get_project_overview(user_id: Any, project_id: Any) -> dict[str, Any]:
+    """Return project-level analytics totals and per-model summary rows."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            require_project_view_role(cur, canonical_project_id, canonical_user_id)
+            cur.execute(
+                queries.get("get_project_analytics_overview"),
+                {"project_id": canonical_project_id},
+            )
+            rows = cur.fetchall()
+
+    models = [serialize_project_model_overview(row) for row in rows]
+    logger.debug(
+        "Fetched project analytics overview project_id=%s models=%s.",
+        canonical_project_id,
+        len(models),
+    )
+    return {
+        "projectID": canonical_project_id,
+        "summary": build_project_summary(models),
+        "models": models,
+    }
+
+
 def list_model_requests(
     user_id: Any,
     project_id: Any,
@@ -223,6 +250,49 @@ def serialize_model_metrics(row: Any | None) -> dict[str, Any]:
         "average_latency_ms": row.get("average_latency_ms"),
         "p95_latency_ms": row.get("p95_latency_ms"),
         "last_request_at": optional_iso8601(row.get("last_request_at")),
+    }
+
+
+def serialize_project_model_overview(row: Any) -> dict[str, Any]:
+    """Serialize one model row in the project analytics overview."""
+    return {
+        "name": row["name"],
+        "model_id": row["model_id"],
+        "status": row["status"],
+        "request_count": row.get("request_count") or 0,
+        "error_count": row.get("error_count") or 0,
+        "average_latency_ms": row.get("average_latency_ms"),
+        "last_request_at": optional_iso8601(row.get("last_request_at")),
+    }
+
+
+def build_project_summary(models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build project-wide totals from serialized per-model analytics rows."""
+    total_requests = sum(int(model["request_count"]) for model in models)
+    latency_weight = sum(
+        int(model["request_count"]) * int(model["average_latency_ms"])
+        for model in models
+        if model["average_latency_ms"] is not None
+    )
+    latency_count = sum(
+        int(model["request_count"])
+        for model in models
+        if model["average_latency_ms"] is not None
+    )
+    last_request_values = [
+        model["last_request_at"] for model in models if model["last_request_at"] is not None
+    ]
+
+    return {
+        "total_models": len(models),
+        "running_models": sum(1 for model in models if model["status"] == "running"),
+        "stopped_models": sum(1 for model in models if model["status"] == "stopped"),
+        "total_requests": total_requests,
+        "error_count": sum(int(model["error_count"]) for model in models),
+        "average_latency_ms": (
+            int(latency_weight / latency_count) if latency_count else None
+        ),
+        "last_request_at": max(last_request_values) if last_request_values else None,
     }
 
 

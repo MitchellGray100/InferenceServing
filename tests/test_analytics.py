@@ -82,6 +82,41 @@ def test_get_model_metrics_route(monkeypatch, client, auth_headers) -> None:
     assert response.get_json() == expected
 
 
+def test_get_project_overview_route(monkeypatch, client, auth_headers) -> None:
+    """The overview route returns project-level analytics."""
+    expected = {
+        "projectID": PROJECT_ID,
+        "summary": {
+            "total_models": 1,
+            "running_models": 1,
+            "stopped_models": 0,
+            "total_requests": 10,
+            "error_count": 1,
+            "average_latency_ms": 100,
+            "last_request_at": "2026-05-17T12:00:00Z",
+        },
+        "models": [],
+    }
+
+    def get_project_overview(user_id, project_id):
+        assert user_id == USER_ID
+        assert project_id == PROJECT_ID
+        return expected
+
+    monkeypatch.setattr(
+        "app.routes.analytics.analytics_service.get_project_overview",
+        get_project_overview,
+    )
+
+    response = client.get(
+        f"/v1/projects/{PROJECT_ID}/analytics/overview",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected
+
+
 def test_list_model_requests_route(monkeypatch, client, auth_headers) -> None:
     """The request-history route forwards filters to the service layer."""
     expected = {"requests": [request_response()]}
@@ -212,6 +247,45 @@ def test_get_model_metrics_defaults_empty_aggregate(monkeypatch) -> None:
         "p95_latency_ms": None,
         "last_request_at": None,
     }
+
+
+def test_get_project_overview_service(monkeypatch) -> None:
+    """Overview service authorizes once and aggregates per-model rows."""
+    fake = FakeTransaction(
+        fetchones=[{"role": "viewer"}],
+        fetchalls=[
+            [
+                {
+                    "name": "qwen-small-prod",
+                    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "status": "running",
+                    "request_count": 10,
+                    "error_count": 1,
+                    "average_latency_ms": 100,
+                    "last_request_at": NOW,
+                },
+                {
+                    "name": "qwen-small-dev",
+                    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "status": "stopped",
+                    "request_count": 0,
+                    "error_count": 0,
+                    "average_latency_ms": None,
+                    "last_request_at": None,
+                },
+            ]
+        ],
+    )
+    monkeypatch.setattr(analytics_service, "transaction", fake.transaction)
+
+    response = analytics_service.get_project_overview(USER_ID, PROJECT_ID)
+
+    assert response["summary"]["total_models"] == 2
+    assert response["summary"]["running_models"] == 1
+    assert response["summary"]["stopped_models"] == 1
+    assert response["summary"]["total_requests"] == 10
+    assert response["summary"]["error_count"] == 1
+    assert response["summary"]["last_request_at"] == "2026-05-17T12:00:00Z"
 
 
 def test_list_model_requests_service(monkeypatch) -> None:

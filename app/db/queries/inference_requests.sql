@@ -55,3 +55,23 @@ SELECT
 FROM inference_requests
 WHERE model_deployment_id = %(model_deployment_id)s
   AND (%(since)s::timestamp IS NULL OR created_at >= %(since)s::timestamp);
+
+-- name: get_project_analytics_overview
+-- Return one row per non-deleted model plus request aggregates so the service
+-- can derive project summary totals and dashboard model cards.
+SELECT
+  md.model_deployment_id,
+  md.name,
+  md.model_id,
+  md.status,
+  COUNT(ir.inference_request_id) AS request_count,
+  COUNT(ir.inference_request_id) FILTER (WHERE ir.status_code >= 400) AS error_count,
+  AVG(ir.latency_ms)::INTEGER AS average_latency_ms,
+  MAX(ir.created_at) AS last_request_at
+FROM model_deployments md
+LEFT JOIN inference_requests ir
+  ON ir.model_deployment_id = md.model_deployment_id
+WHERE md.project_id = %(project_id)s
+  AND md.deleted_at IS NULL
+GROUP BY md.model_deployment_id
+ORDER BY md.created_at DESC;

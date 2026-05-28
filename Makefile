@@ -1,7 +1,7 @@
 PYTHON ?= python
 POETRY ?= $(PYTHON) -m poetry
 
-.PHONY: install setup-env clean-env migrate run-api run-api-gunicorn run-worker run-worker-dry-run test-local-apis tests coverage lint compile clean
+.PHONY: install setup-env clean-env migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test-local-apis test-local-k8s tests coverage lint compile clean
 
 install:
 	$(PYTHON) -m pip install --upgrade pip poetry
@@ -12,12 +12,13 @@ setup-env: install
 	docker compose up -d postgres
 	$(POETRY) run python scripts/wait_for_postgres.py
 	$(POETRY) run python -m app.db.migrate
-	mkdir -p .local/kube
-	WORKER_DRY_RUN=true WORKER_POLL_INTERVAL_SECONDS=0.2 KUBECONFIG_DIR=.local/kube docker compose up -d --build worker
+	$(POETRY) run python scripts/kind_env.py ensure
+	K8S_SMOKE_TEST_IMAGE=$${K8S_SMOKE_TEST_IMAGE:-hashicorp/http-echo:1.0} WORKER_DRY_RUN=true WORKER_POLL_INTERVAL_SECONDS=0.2 KUBECONFIG_DIR=.local/kube docker compose up -d --build worker
 	$(POETRY) run python scripts/local_env_guard.py mark-setup-complete
 
 clean-env:
 	docker compose down -v --remove-orphans
+	$(POETRY) run python scripts/kind_env.py delete
 	$(POETRY) run python scripts/local_env_guard.py clear-setup-marker
 
 migrate:
@@ -43,8 +44,16 @@ run-worker:
 run-worker-dry-run:
 	WORKER_DRY_RUN=true $(POETRY) run python -m app.services.deployment_worker
 
+start-worker-real-k8s:
+	$(POETRY) run python scripts/kind_env.py ensure
+	K8S_SMOKE_TEST_IMAGE=$${K8S_SMOKE_TEST_IMAGE:-hashicorp/http-echo:1.0} KUBECONFIG_DIR=.local/kube WORKER_DRY_RUN=false docker compose up -d --build worker
+
 test-local-apis:
 	$(POETRY) run python scripts/smoke_test_local_api.py
+
+test-local-k8s:
+	$(MAKE) start-worker-real-k8s
+	$(POETRY) run python scripts/smoke_test_local_k8s.py
 
 tests:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(POETRY) run pytest

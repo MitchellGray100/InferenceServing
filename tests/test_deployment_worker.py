@@ -223,7 +223,9 @@ def test_dispatch_job_calls_apply_for_deploy_and_start(monkeypatch) -> None:
     monkeypatch.setattr(
         deployment_worker.deployment_manager,
         "apply_model_deployment",
-        lambda clients, deployment: calls.append(deployment["name"]),
+        lambda clients, deployment, hugging_face_token=None: calls.append(
+            deployment["name"]
+        ),
     )
 
     deployment_worker.dispatch_job(FakeClients(), job_row("deploy_model"), deployment_row())
@@ -267,7 +269,7 @@ def test_dispatch_job_dry_run_skips_kubernetes(monkeypatch) -> None:
     monkeypatch.setattr(
         deployment_worker.deployment_manager,
         "apply_model_deployment",
-        lambda clients, deployment: calls.append("apply"),
+        lambda clients, deployment, hugging_face_token=None: calls.append("apply"),
     )
 
     deployment_worker.dispatch_job(FakeClients(), job_row("deploy_model"), deployment_row())

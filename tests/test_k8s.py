@@ -2,10 +2,13 @@
 
 import pytest
 
+from app.config import Config
 from app.k8s import client as k8s_client
 from app.k8s.deployment_manager import (
     apply_model_deployment,
     delete_model_deployment,
+    inspect_model_readiness,
+    read_model_logs,
     scale_model_deployment,
 )
 from app.k8s.manifests import (
@@ -111,6 +114,19 @@ def test_build_deployment_manifest_with_gpu_and_secret() -> None:
     )
 
 
+def test_build_deployment_manifest_with_smoke_test_image(monkeypatch) -> None:
+    payload = deployment_payload()
+    payload["vllm_image"] = "hashicorp/http-echo:1.0"
+    monkeypatch.setattr(Config, "K8S_SMOKE_TEST_IMAGE", "hashicorp/http-echo:1.0")
+
+    manifest = build_deployment_manifest(payload)
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["args"] == ["-listen=:8000", "-text=ok"]
+    assert container["imagePullPolicy"] == "IfNotPresent"
+    assert container["readinessProbe"]["httpGet"]["path"] == "/health"
+
+
 def test_build_service_manifest() -> None:
     manifest = build_service_manifest(deployment_payload())
 
@@ -180,9 +196,13 @@ def test_deployment_manager_apply_order() -> None:
         "create_namespace",
         "create_namespaced_persistent_volume_claim",
     ]
-    assert clients.apps.calls == ["create_namespaced_deployment"]
+    assert clients.apps.calls == [
+        "create_namespaced_deployment",
+        "read_namespaced_deployment",
+    ]
     assert clients.autoscaling.calls == [
-        "create_namespaced_horizontal_pod_autoscaler"
+        "create_namespaced_horizontal_pod_autoscaler",
+        "read_namespaced_horizontal_pod_autoscaler",
     ]
 
 
@@ -240,12 +260,75 @@ def test_deployment_manager_delete_can_skip_secret_and_cache() -> None:
 
 
 def test_deployment_manager_scale() -> None:
-    apps = FakeApps()
-    clients = k8s_client.KubernetesClients(core=FakeCore(), apps=apps, autoscaling=FakeHpa())
+    apps = FakeApps(deployment_status=ready_deployment_status(available_replicas=3))
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(pods=[ready_pod("pod-a"), ready_pod("pod-b"), ready_pod("pod-c")]),
+        apps=apps,
+        autoscaling=FakeHpa(),
+    )
 
     scale_model_deployment(clients, deployment_payload(), 3)
 
     assert apps.scale_body == {"spec": {"replicas": 3}}
+
+
+def test_inspect_model_readiness_ready() -> None:
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(pods=[ready_pod()]),
+        apps=FakeApps(deployment_status=ready_deployment_status()),
+        autoscaling=FakeHpa(),
+    )
+
+    status = inspect_model_readiness(clients, deployment_payload(), expected_replicas=1)
+
+    assert status["ready"] is True
+    assert status["scheduled_pods"] == 1
+    assert status["ready_pods"] == 1
+
+
+def test_inspect_model_readiness_detects_image_pull_failure() -> None:
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(pods=[waiting_pod("ImagePullBackOff")]),
+        apps=FakeApps(deployment_status=ready_deployment_status()),
+        autoscaling=FakeHpa(),
+    )
+
+    status = inspect_model_readiness(clients, deployment_payload(), expected_replicas=1)
+
+    assert status["ready"] is False
+    assert status["failed"] is True
+    assert "ImagePullBackOff" in status["reason"]
+
+
+def test_read_model_logs_returns_one_entry_per_pod() -> None:
+    core = FakeCore(pods=[ready_pod("pod-a"), ready_pod("pod-b")])
+    clients = k8s_client.KubernetesClients(
+        core=core,
+        apps=FakeApps(deployment_status=ready_deployment_status()),
+        autoscaling=FakeHpa(),
+    )
+
+    logs = read_model_logs(clients, deployment_payload(), tail_lines=20)
+
+    assert logs == [
+        {"pod": "pod-a", "text": "logs for pod-a"},
+        {"pod": "pod-b", "text": "logs for pod-b"},
+    ]
+    assert core.log_tail_lines == [20, 20]
+
+
+def test_read_model_logs_returns_error_text_when_pod_log_read_fails() -> None:
+    core = FakeCore(pods=[ready_pod("pod-a")], fail_log_read=True)
+    clients = k8s_client.KubernetesClients(
+        core=core,
+        apps=FakeApps(deployment_status=ready_deployment_status()),
+        autoscaling=FakeHpa(),
+    )
+
+    logs = read_model_logs(clients, deployment_payload(), tail_lines=20)
+
+    assert logs[0]["pod"] == "pod-a"
+    assert logs[0]["text"].startswith("Failed to read pod logs:")
 
 
 def test_apply_secret_and_hpa_patch_on_conflict() -> None:
@@ -296,16 +379,52 @@ class FakeApiException(Exception):
         self.status = status
 
 
+def ready_deployment_status(available_replicas: int = 1) -> dict[str, object]:
+    return {
+        "status": {
+            "available_replicas": available_replicas,
+            "conditions": [{"type": "Available", "status": "True"}],
+        }
+    }
+
+
+def ready_pod(name: str = "pod-a") -> dict[str, object]:
+    return {
+        "metadata": {"name": name},
+        "status": {
+            "conditions": [
+                {"type": "PodScheduled", "status": "True"},
+                {"type": "Ready", "status": "True"},
+            ],
+            "container_statuses": [],
+        },
+    }
+
+
+def waiting_pod(reason: str) -> dict[str, object]:
+    pod = ready_pod()
+    pod["status"]["conditions"] = [{"type": "PodScheduled", "status": "True"}]
+    pod["status"]["container_statuses"] = [
+        {"state": {"waiting": {"reason": reason, "message": "pull failed"}}}
+    ]
+    return pod
+
+
 class FakeCore:
     def __init__(
         self,
         *,
         conflict_on_create: bool = False,
         not_found_on_delete: bool = False,
+        pods=None,
+        fail_log_read: bool = False,
     ):
         self.conflict_on_create = conflict_on_create
         self.not_found_on_delete = not_found_on_delete
+        self.pods = pods or [ready_pod()]
+        self.fail_log_read = fail_log_read
         self.calls: list[str] = []
+        self.log_tail_lines: list[int] = []
 
     def create_namespace(self, manifest):
         self.calls.append("create_namespace")
@@ -347,6 +466,29 @@ class FakeCore:
         self.calls.append("patch_namespaced_service")
         return manifest
 
+    def read_namespaced_service(self, name, namespace):
+        self.calls.append("read_namespaced_service")
+        return {"metadata": {"name": name, "namespace": namespace}}
+
+    def read_namespaced_persistent_volume_claim(self, name, namespace):
+        self.calls.append("read_namespaced_persistent_volume_claim")
+        return {"metadata": {"name": name, "namespace": namespace}}
+
+    def read_namespaced_secret(self, name, namespace):
+        self.calls.append("read_namespaced_secret")
+        return {"metadata": {"name": name, "namespace": namespace}}
+
+    def list_namespaced_pod(self, namespace, label_selector):
+        self.calls.append("list_namespaced_pod")
+        return type("PodList", (), {"items": self.pods})()
+
+    def read_namespaced_pod_log(self, name, namespace, tail_lines, _request_timeout=None):
+        self.calls.append("read_namespaced_pod_log")
+        self.log_tail_lines.append(tail_lines)
+        if self.fail_log_read:
+            raise RuntimeError("logs unavailable")
+        return f"logs for {name}"
+
     def delete_namespaced_service(self, name, namespace):
         self.calls.append("delete_namespaced_service")
         if self.not_found_on_delete:
@@ -363,9 +505,10 @@ class FakeCore:
 
 
 class FakeApps:
-    def __init__(self):
+    def __init__(self, *, deployment_status=None):
         self.calls: list[str] = []
         self.scale_body = None
+        self.deployment_status = deployment_status or ready_deployment_status()
 
     def create_namespaced_deployment(self, namespace, manifest):
         self.calls.append("create_namespaced_deployment")
@@ -374,6 +517,10 @@ class FakeApps:
     def patch_namespaced_deployment(self, name, namespace, manifest):
         self.calls.append("patch_namespaced_deployment")
         return manifest
+
+    def read_namespaced_deployment(self, name, namespace):
+        self.calls.append("read_namespaced_deployment")
+        return self.deployment_status
 
     def delete_namespaced_deployment(self, name, namespace):
         self.calls.append("delete_namespaced_deployment")
@@ -399,6 +546,10 @@ class FakeHpa:
     def patch_namespaced_horizontal_pod_autoscaler(self, name, namespace, manifest):
         self.calls.append("patch_namespaced_horizontal_pod_autoscaler")
         return manifest
+
+    def read_namespaced_horizontal_pod_autoscaler(self, name, namespace):
+        self.calls.append("read_namespaced_horizontal_pod_autoscaler")
+        return {"metadata": {"name": name, "namespace": namespace}}
 
     def delete_namespaced_horizontal_pod_autoscaler(self, name, namespace):
         self.calls.append("delete_namespaced_horizontal_pod_autoscaler")

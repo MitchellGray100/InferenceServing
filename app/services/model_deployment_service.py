@@ -14,6 +14,8 @@ from flask import current_app
 
 from app.db.pool import transaction
 from app.db.sql import load_queries
+from app.k8s import client as k8s_client
+from app.k8s import deployment_manager
 from app.k8s.names import build_model_resource_names
 from app.services.project_service import (
     VIEW_ROLES,
@@ -61,6 +63,8 @@ MAX_VLLM_DTYPE_LENGTH = 32
 MAX_REPLICAS = 100
 MAX_GPU_COUNT = 16
 MAX_MODEL_LEN = 262_144
+DEFAULT_LOG_TAIL_LINES = 200
+MAX_LOG_TAIL_LINES = 1000
 
 
 def create_model_deployment(
@@ -229,6 +233,54 @@ def list_model_deployment_jobs(
         len(rows),
     )
     return {"deploymentJobs": [serialize_deployment_job(row) for row in rows]}
+
+
+def list_model_logs(
+    user_id: Any,
+    project_id: Any,
+    model_name: Any,
+    *,
+    tail: Any = None,
+) -> dict[str, Any]:
+    """Return recent Kubernetes pod logs for one named model deployment."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+    canonical_model_name = validate_deployment_name(model_name)
+    tail_lines = parse_log_tail(tail)
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
+            require_role(role, VIEW_ROLES)
+            cur.execute(
+                queries.get("get_model_deployment_by_name"),
+                {
+                    "project_id": canonical_project_id,
+                    "name": canonical_model_name,
+                },
+            )
+            deployment = cur.fetchone()
+
+    if deployment is None:
+        raise model_deployment_not_found_error()
+
+    clients = k8s_client.create_clients()
+    logs = deployment_manager.read_model_logs(
+        clients,
+        deployment,
+        tail_lines=tail_lines,
+    )
+    logger.info(
+        "Read Kubernetes logs project_id=%s model=%s pods=%s tail=%s.",
+        canonical_project_id,
+        canonical_model_name,
+        len(logs),
+        tail_lines,
+    )
+    return {
+        "model": serialize_model_deployment(deployment),
+        "logs": logs,
+    }
 
 
 def start_model_deployment(
@@ -634,6 +686,27 @@ def get_model_deployment_with_cursor(
         },
     )
     return cur.fetchone()
+
+
+def parse_log_tail(value: Any) -> int:
+    """Parse the optional model log tail query parameter."""
+    if value is None or value == "":
+        return DEFAULT_LOG_TAIL_LINES
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiError(
+            type="validation_error",
+            message="tail must be an integer.",
+            status_code=400,
+            details={"field": "tail"},
+        ) from exc
+    return validate_positive_int(
+        parsed,
+        "tail",
+        min_value=1,
+        max_value=MAX_LOG_TAIL_LINES,
+    )
 
 
 def enqueue_deployment_job_with_cursor(

@@ -8,7 +8,15 @@ implementation grows.
 from flask import Flask
 
 from app.config import Config
-from app.routes import api_keys, auth, model_deployments, project_members, projects, users
+from app.routes import (
+    api_keys,
+    auth,
+    inference,
+    model_deployments,
+    project_members,
+    projects,
+    users,
+)
 from app.utils.errors import register_error_handlers
 
 
@@ -24,5 +32,6 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app.register_blueprint(project_members.bp)
     app.register_blueprint(api_keys.bp)
     app.register_blueprint(model_deployments.bp)
+    app.register_blueprint(inference.bp)
 
     return app

@@ -27,6 +27,8 @@ def create_user(email: Any, password: Any) -> dict[str, Any]:
     Password hashing happens before the insert so raw passwords never cross the
     database boundary.
     """
+    # Normalize/validate first so the database only sees canonical email text
+    # and never receives an invalid or short plaintext password.
     normalized_email = normalize_email(email)
     plaintext_password = validate_password(password)
     hashed_password = hash_password(plaintext_password)
@@ -34,6 +36,8 @@ def create_user(email: Any, password: Any) -> dict[str, Any]:
     try:
         with transaction() as conn:
             with conn.cursor() as cur:
+                # Store only the password hash. Argon2 embeds its own salt and
+                # parameters inside this string.
                 cur.execute(
                     queries.get("create_user"),
                     {
@@ -56,10 +60,14 @@ def create_user(email: Any, password: Any) -> dict[str, Any]:
 
 def get_user(user_id: Any) -> dict[str, Any]:
     """Return a public user record by user_id."""
+    # Canonical UUID strings make query parameters consistent even if callers
+    # pass uppercase or otherwise equivalent UUID text.
     canonical_user_id = validate_uuid(user_id, "userID")
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            # The SQL query selects public account fields plus last_login_at; it
+            # does not expose hashed_password to this read path.
             cur.execute(
                 queries.get("get_user_by_id"),
                 {"user_id": canonical_user_id},
@@ -83,10 +91,14 @@ def delete_user(user_id: Any) -> dict[str, bool]:
     keys/cascades. Higher-level cleanup, such as Kubernetes resources, belongs
     in deployment worker flows.
     """
+    # The current `/me` route supplies this ID from the bearer token, so callers
+    # cannot delete arbitrary user IDs through the public API.
     canonical_user_id = validate_uuid(user_id, "userID")
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            # The delete query returns a row only when a user existed, letting
+            # the service distinguish a real deletion from a stale token.
             cur.execute(
                 queries.get("delete_user"),
                 {"user_id": canonical_user_id},
@@ -105,6 +117,8 @@ def delete_user(user_id: Any) -> dict[str, bool]:
 
 def serialize_user(row: Any) -> dict[str, Any]:
     """Serialize a database user row into API response shape."""
+    # Keep all user response shaping in one place so route functions cannot
+    # accidentally return hashed_password or other internal fields.
     return {
         "userID": str(row["user_id"]),
         "email": row["email"],

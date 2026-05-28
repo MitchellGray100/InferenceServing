@@ -23,6 +23,8 @@ bp = Blueprint("users", __name__, url_prefix="/v1/users")
 @bp.post("")
 def create_user() -> tuple[object, int]:
     """Create a new user account."""
+    # Routes only unpack HTTP input. Validation, hashing, and persistence live
+    # in the service layer so they can be tested without Flask.
     data = require_json_object(request.get_json(silent=True))
     response = user_service.create_user(
         email=require_field(data, "email"),
@@ -35,6 +37,8 @@ def create_user() -> tuple[object, int]:
 @require_user_auth
 def get_current_user() -> tuple[object, int]:
     """Return the authenticated user's account record."""
+    # `require_user_auth` decoded the bearer token and stored the user ID on
+    # Flask's request context before this function is called.
     return jsonify(user_service.get_user(current_user_id())), 200
 
 
@@ -42,4 +46,6 @@ def get_current_user() -> tuple[object, int]:
 @require_user_auth
 def delete_current_user() -> tuple[object, int]:
     """Delete the authenticated user's account."""
+    # `/me` avoids accepting a user ID from the client, so users can only
+    # delete the account represented by their own access token.
     return jsonify(user_service.delete_user(current_user_id())), 200

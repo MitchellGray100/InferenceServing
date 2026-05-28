@@ -30,9 +30,12 @@ def load_kubernetes_config(*, prefer_in_cluster: bool = True) -> None:
 
     if prefer_in_cluster:
         try:
+            # Production workers run inside Kubernetes, so service account
+            # credentials should be tried before the developer kubeconfig.
             config.load_incluster_config()
             return
         except config.ConfigException:
+            # Local development falls back to ~/.kube/config below.
             pass
 
     config.load_kube_config()
@@ -43,6 +46,8 @@ def create_clients(*, load_config: bool = True) -> KubernetesClients:
     if load_config:
         load_kubernetes_config()
 
+    # Import lazily so unit tests can import this module without installing or
+    # configuring the Kubernetes package.
     from kubernetes import client
 
     return KubernetesClients(
@@ -168,6 +173,8 @@ def _create_or_patch(create: Any, patch: Any) -> Any:
     try:
         return create()
     except Exception as exc:
+        # 409 means the resource already exists. Patching makes worker retries
+        # idempotent for the desired manifest.
         if _status_code(exc) == 409:
             return patch()
         raise
@@ -178,6 +185,8 @@ def _delete_or_ignore_not_found(delete: Any) -> Any:
     try:
         return delete()
     except Exception as exc:
+        # Delete jobs can be retried. If the resource is already gone, the
+        # desired end state is satisfied.
         if _status_code(exc) == KUBERNETES_NOT_FOUND:
             return None
         raise

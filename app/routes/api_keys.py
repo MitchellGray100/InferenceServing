@@ -21,6 +21,8 @@ bp = Blueprint("api_keys", __name__, url_prefix="/v1/projects")
 @require_user_auth
 def create_api_key(project_id: str) -> tuple[object, int]:
     """Create a project API key and return the raw key once."""
+    # Only the create response includes the raw credential. Later list calls
+    # return metadata only because the service stores only a keyed hash.
     data = require_json_object(request.get_json(silent=True))
     response = api_key_service.create_api_key(
         user_id=current_user_id(),
@@ -34,6 +36,8 @@ def create_api_key(project_id: str) -> tuple[object, int]:
 @require_user_auth
 def list_api_keys(project_id: str) -> tuple[object, int]:
     """List project API key metadata without key hashes."""
+    # This endpoint is safe for project viewers because it never returns the raw
+    # key or stored HMAC.
     response = api_key_service.list_api_keys(current_user_id(), project_id)
     return jsonify(response), 200
 
@@ -42,6 +46,8 @@ def list_api_keys(project_id: str) -> tuple[object, int]:
 @require_user_auth
 def revoke_api_key(project_id: str, api_key_id: str) -> tuple[object, int]:
     """Revoke a project API key."""
+    # Revocation is scoped by project ID and API key ID so one project's keys
+    # cannot be affected through another project route.
     response = api_key_service.revoke_api_key(
         user_id=current_user_id(),
         project_id=project_id,

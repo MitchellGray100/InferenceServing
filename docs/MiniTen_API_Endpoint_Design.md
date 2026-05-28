@@ -2053,6 +2053,10 @@ POST /v1/chat/completions
 
 Sends chat messages to a deployed model using an OpenAI-compatible request format.
 
+The MVP implementation supports non-streaming responses first. Requests with
+`"stream": true` return `streaming_not_supported` until streaming proxy support
+is added.
+
 Used by:
 
 ```text
@@ -2144,13 +2148,24 @@ Example shape:
 
 ### Errors
 
-If model is stopped:
+If streaming is requested:
 
 ```json
 {
   "error": {
-    "type": "model_stopped",
-    "message": "Model qwen-small-prod is stopped. Start it from the dashboard before sending inference requests."
+    "type": "streaming_not_supported",
+    "message": "Streaming responses are not supported yet."
+  }
+}
+```
+
+If model is stopped or otherwise not ready:
+
+```json
+{
+  "error": {
+    "type": "model_not_ready",
+    "message": "Model deployment is not running."
   }
 }
 ```
@@ -2161,7 +2176,7 @@ If model does not exist in project:
 {
   "error": {
     "type": "model_not_found",
-    "message": "No model named qwen-small-prod exists in this project."
+    "message": "Model not found."
   }
 }
 ```
@@ -2215,7 +2230,7 @@ Authorization: Bearer mt_live_xxx
 ```text
 1. Validate project API key.
 2. Resolve project_id.
-3. Return non-deleted model deployments in the project.
+3. Return running, non-deleted model deployments in the project.
 ```
 
 ### Response

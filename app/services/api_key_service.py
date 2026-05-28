@@ -34,14 +34,20 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
     metadata row commits. The database stores a visible prefix and HMAC; it does
     not store enough information to reconstruct the raw key.
     """
+    # Validate all caller-controlled identifiers before generating/storing the
+    # credential metadata.
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
     key_name = validate_api_key_name(name)
+
+    # Generate the raw key once. Only the visible prefix and HMAC are persisted.
     raw_key, key_prefix = api_keys.generate_api_key()
     key_hash = api_keys.hash_api_key(raw_key)
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            # Project membership is checked in the same transaction as key
+            # creation so permission and insert cannot drift apart.
             role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
             require_role(role, WRITE_ROLES)
 
@@ -78,6 +84,7 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
 
 def list_api_keys(user_id: Any, project_id: Any) -> dict[str, list[dict[str, Any]]]:
     """List project API key metadata for any project member."""
+    # Viewers can inspect key metadata, but no read path can recover raw keys.
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
 
@@ -100,6 +107,8 @@ def revoke_api_key(user_id: Any, project_id: Any, api_key_id: Any) -> dict[str, 
     Revocation is soft-delete style: `revoked_at` is set so historical
     inference rows can still reference the key metadata.
     """
+    # Revocation is authorized against the project first, then scoped to the
+    # key ID inside that project.
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
     canonical_api_key_id = validate_uuid(api_key_id, "apiKeyID")
@@ -136,6 +145,8 @@ def authenticate_project_api_key(raw_key: str) -> dict[str, str]:
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            # A prefix can theoretically match multiple active keys, so each
+            # candidate still goes through constant-time HMAC verification.
             cur.execute(
                 queries.get("find_active_api_keys_by_prefix"),
                 {"key_prefix": key_prefix},
@@ -144,6 +155,8 @@ def authenticate_project_api_key(raw_key: str) -> dict[str, str]:
 
             for row in rows:
                 if api_keys.verify_api_key(raw_key, row["key_hash"]):
+                    # Update last_used_at only after a real match. Failed key
+                    # attempts do not mutate key metadata.
                     cur.execute(
                         queries.get("update_api_key_last_used"),
                         {"api_key_id": row["api_key_id"]},

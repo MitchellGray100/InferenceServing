@@ -69,10 +69,13 @@ def parse_query_file(path: Path) -> dict[str, Query]:
     current_lines: list[str] = []
 
     for line in path.read_text(encoding="utf-8").splitlines():
+        # A marker starts a new named query. Everything after the marker belongs
+        # to that query until the next marker or end of file.
         marker = QUERY_MARKER_RE.match(line.strip())
 
         if marker:
             if current_name is not None:
+                # Finalize the previous query before starting the next one.
                 queries[current_name] = _build_query(
                     name=current_name,
                     lines=current_lines,
@@ -84,9 +87,12 @@ def parse_query_file(path: Path) -> dict[str, Query]:
             continue
 
         if current_name is not None:
+            # Ignore file header comments before the first marker, but preserve
+            # comments inside query bodies because they can explain SQL intent.
             current_lines.append(line)
 
     if current_name is not None:
+        # End-of-file also terminates the active query.
         queries[current_name] = _build_query(
             name=current_name,
             lines=current_lines,
@@ -103,6 +109,8 @@ def load_queries(directory: Path | None = None) -> QueryStore:
 
     for path in sorted(directory.glob("*.sql")):
         for name, query in parse_query_file(path).items():
+            # Query names are global across files so services can call
+            # `queries.get("name")` without caring which SQL file owns it.
             if name in queries:
                 raise ValueError(
                     f"Duplicate SQL query name `{name}` in {path} and "
@@ -114,6 +122,7 @@ def load_queries(directory: Path | None = None) -> QueryStore:
 
 
 def _build_query(name: str, lines: list[str], source: Path) -> Query:
+    """Construct a Query and reject empty named sections."""
     sql = "\n".join(lines).strip()
 
     if not sql:

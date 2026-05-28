@@ -68,6 +68,8 @@ def build_deployment_manifest(
     secret_name: str | None = None,
 ) -> dict[str, Any]:
     """Build a Kubernetes Deployment manifest for a vLLM OpenAI server."""
+    # Normalize and validate resource names once, then reuse them throughout the
+    # manifest so selectors, labels, and volumes stay aligned.
     names = names_from_deployment(deployment)
     namespace = names["k8s_namespace"]
     deployment_name = names["k8s_deployment_name"]
@@ -87,6 +89,8 @@ def build_deployment_manifest(
         "spec": {
             "replicas": deployment["replicas"],
             "selector": {
+                # The Service selector and pod template labels must match or
+                # traffic will never reach the vLLM pods.
                 "matchLabels": model_selector_labels(service_name),
             },
             "template": {
@@ -211,6 +215,8 @@ def build_model_manifests(
     hugging_face_token: str | None = None,
 ) -> dict[str, dict[str, Any] | None]:
     """Build all resources required for one model deployment."""
+    # Build the names once so the Deployment, Service, HPA, PVC, and optional
+    # Secret all refer to the same deterministic resources.
     names = names_from_deployment(deployment)
     secret_name = names["k8s_secret_name"] if hugging_face_token else None
     return {
@@ -244,6 +250,8 @@ def build_vllm_container(
     secret_name: str | None = None,
 ) -> dict[str, Any]:
     """Build the single vLLM container spec for a Deployment."""
+    # vLLM exposes an OpenAI-compatible HTTP server. The deployment name is the
+    # served model name clients use in `/v1/chat/completions`.
     container = {
         "name": "vllm",
         "image": deployment["vllm_image"],
@@ -269,6 +277,8 @@ def build_vllm_container(
         ],
         "env": [
             {
+                # Persist Hugging Face cache on the PVC so restarts do not
+                # redownload model weights every time.
                 "name": "HF_HOME",
                 "value": HF_CACHE_MOUNT_PATH,
             }
@@ -292,6 +302,8 @@ def build_vllm_container(
     }
 
     if secret_name:
+        # Private Hugging Face models use a Kubernetes Secret mounted as the
+        # standard HF_TOKEN environment variable.
         container["env"].append(
             {
                 "name": "HF_TOKEN",
@@ -309,6 +321,8 @@ def build_vllm_container(
 
 def build_resource_requirements(deployment: dict[str, Any]) -> dict[str, Any]:
     """Build Kubernetes container requests/limits from deployment metadata."""
+    # Drop unset CPU/memory values so Kubernetes receives only explicit
+    # requests/limits from the deployment record.
     requests = _without_none(
         {
             "cpu": deployment.get("cpu_request"),
@@ -324,6 +338,7 @@ def build_resource_requirements(deployment: dict[str, Any]) -> dict[str, Any]:
     gpu_count = deployment.get("gpu_count", 0)
 
     if gpu_count:
+        # NVIDIA's device plugin advertises GPUs through this extended resource.
         limits["nvidia.com/gpu"] = gpu_count
 
     return {
@@ -334,6 +349,8 @@ def build_resource_requirements(deployment: dict[str, Any]) -> dict[str, Any]:
 
 def names_from_deployment(deployment: dict[str, Any]) -> dict[str, str]:
     """Return Kubernetes names from metadata, deriving optional names as needed."""
+    # Older tests or future callers can pass only namespace/name; persisted rows
+    # can override the generated names with the exact values stored at create time.
     names = build_model_resource_names(
         deployment["k8s_namespace"],
         deployment["name"],
@@ -380,4 +397,5 @@ def model_labels(namespace: str, model_name: str) -> dict[str, str]:
 
 
 def _without_none(values: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy with unset resource fields removed."""
     return {key: value for key, value in values.items() if value is not None}

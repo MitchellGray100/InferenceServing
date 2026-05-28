@@ -22,6 +22,8 @@ bp = Blueprint("auth", __name__, url_prefix="/v1/auth")
 @bp.post("/login")
 def login() -> tuple[object, int]:
     """Authenticate a user and return a bearer token."""
+    # Keep request parsing here and credential checking in `auth_service` so
+    # login behavior is reusable from CLI/dashboard code later.
     data = require_json_object(request.get_json(silent=True))
     response = auth_service.login(
         email=require_field(data, "email"),
@@ -38,4 +40,6 @@ def logout() -> tuple[object, int]:
     MVP bearer tokens are stateless, so clients logout by discarding the token.
     The endpoint still exists for a consistent API/dashboard flow.
     """
+    # The auth decorator still matters: it prevents anonymous callers from
+    # getting a successful logout response that looks like an authenticated flow.
     return jsonify(auth_service.logout()), 200

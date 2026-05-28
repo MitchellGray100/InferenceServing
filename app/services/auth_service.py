@@ -30,6 +30,8 @@ def login(email: Any, password: Any) -> dict[str, Any]:
     to enumerate registered emails or infer password policy details.
     """
     try:
+        # Email normalization is safe to expose, but any validation failure is
+        # converted to `invalid_credentials` below for a uniform login response.
         normalized_email = normalize_email(email)
         plaintext_password = validate_string(password, "password")
     except ValidationError as exc:
@@ -37,18 +39,24 @@ def login(email: Any, password: Any) -> dict[str, Any]:
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            # This auth-specific query is allowed to load the password hash; the
+            # normal user serialization path never returns it.
             cur.execute(
                 queries.get("get_user_auth_by_email"),
                 {"email": normalized_email},
             )
             auth_row = cur.fetchone()
 
+            # Missing users and password mismatches intentionally share the
+            # same response so login cannot be used for email enumeration.
             if auth_row is None or not verify_password(
                 plaintext_password,
                 auth_row["hashed_password"],
             ):
                 raise invalid_credentials_error()
 
+            # Record successful login time after the password check so failed
+            # attempts do not mutate account metadata.
             cur.execute(
                 queries.get("update_user_last_login"),
                 {"user_id": auth_row["user_id"]},
@@ -56,6 +64,8 @@ def login(email: Any, password: Any) -> dict[str, Any]:
             user_row = cur.fetchone()
 
     return {
+        # Tokens are stateless JWTs. The client stores and presents this value
+        # in `Authorization: Bearer ...` for control-plane requests.
         "access_token": create_access_token(str(auth_row["user_id"])),
         "token_type": "bearer",
         "user": serialize_user(user_row),

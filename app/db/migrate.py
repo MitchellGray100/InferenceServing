@@ -53,11 +53,15 @@ def load_dotenv_file(path: Path | None = None) -> None:
         return
 
     for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        # This is intentionally small: it supports KEY=value lines used by the
+        # local app without pulling in an extra runtime dependency.
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
 
         key, value = line.split("=", 1)
+        # Preserve any value already exported by the shell; .env only fills
+        # missing variables for local development.
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         os.environ.setdefault(key, value)
@@ -68,6 +72,8 @@ def load_migrations(directory: Path) -> list[Migration]:
     migrations: list[Migration] = []
 
     for path in sorted(directory.glob("*.sql")):
+        # The checksum lets us detect a migration file that was edited after it
+        # had already been applied to a database.
         sql = path.read_text(encoding="utf-8")
         checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
         migrations.append(
@@ -85,6 +91,8 @@ def load_migrations(directory: Path) -> list[Migration]:
 def get_applied_migrations(conn: Any) -> dict[str, str]:
     """Return already-applied migrations keyed by filename."""
     with conn.cursor() as cur:
+        # Ensure the bookkeeping table exists before checking which migrations
+        # have already run.
         cur.execute(MIGRATION_TABLE_SQL)
         cur.execute("SELECT version, checksum FROM schema_migrations")
         return dict(cur.fetchall())
@@ -92,6 +100,8 @@ def get_applied_migrations(conn: Any) -> dict[str, str]:
 
 def apply_migration(conn: Any, migration: Migration) -> None:
     """Apply one migration and record its checksum atomically."""
+    # If the migration SQL fails, the schema_migrations insert rolls back too,
+    # so the database will retry the same migration on the next run.
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(migration.sql)
@@ -122,12 +132,15 @@ def migrate(database_url: str, directory: Path | None = None) -> list[str]:
         applied = get_applied_migrations(conn)
 
         for migration in migrations:
+            # Matching checksum means this migration already ran unchanged.
             existing_checksum = applied.get(migration.version)
 
             if existing_checksum == migration.checksum:
                 continue
 
             if existing_checksum is not None:
+                # Editing applied migrations can make environments diverge, so
+                # fail loudly instead of guessing how to recover.
                 raise RuntimeError(
                     "Applied migration checksum mismatch for "
                     f"{migration.version}. Refusing to continue."

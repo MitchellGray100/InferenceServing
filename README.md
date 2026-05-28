@@ -312,6 +312,10 @@ Authorization: Bearer <project_api_key>
 }
 ```
 
+The MVP proxies non-streaming chat completions first. Requests with
+`"stream": true` return a `streaming_not_supported` error until streaming is
+implemented.
+
 ---
 
 ## System Architecture

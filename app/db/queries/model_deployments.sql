@@ -77,6 +77,16 @@ WHERE project_id = %(project_id)s
   AND name = %(name)s
   AND deleted_at IS NULL;
 
+-- name: list_running_model_deployments_for_project
+-- OpenAI-compatible /v1/models should only expose deployments that can receive
+-- inference traffic.
+SELECT *
+FROM model_deployments
+WHERE project_id = %(project_id)s
+  AND status = 'running'
+  AND deleted_at IS NULL
+ORDER BY name ASC;
+
 -- name: get_model_deployment_by_id
 -- Control-plane commands use immutable UUIDs so a future rename feature would
 -- not accidentally target the wrong deployment.

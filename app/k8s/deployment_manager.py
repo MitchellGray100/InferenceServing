@@ -23,17 +23,24 @@ def apply_model_deployment(
     hugging_face_token: str | None = None,
 ) -> None:
     """Apply Namespace, cache PVC, optional Secret, Deployment, Service, and HPA."""
+    # Build every manifest from the same deployment record so Kubernetes state
+    # matches the desired state persisted by the API request.
     manifests = build_model_manifests(
         deployment,
         pvc_size=pvc_size,
         hugging_face_token=hugging_face_token,
     )
+
+    # Namespace and PVC must exist before pods can be scheduled with the cache
+    # volume mounted.
     k8s_client.apply_namespace(clients, manifests["namespace"])
     k8s_client.apply_pvc(clients, manifests["pvc"])
 
     if manifests["secret"] is not None:
         k8s_client.apply_secret(clients, manifests["secret"])
 
+    # Apply Deployment before Service/HPA so selectors and scale targets can
+    # resolve immediately after the worker finishes.
     k8s_client.apply_deployment(clients, manifests["deployment"])
     k8s_client.apply_service(clients, manifests["service"])
 
@@ -56,6 +63,9 @@ def delete_model_deployment(
     """
     names = build_model_resource_names(deployment["k8s_namespace"], deployment["name"])
     namespace = names["k8s_namespace"]
+
+    # Delete traffic/scaling resources before deleting pods. Each delete helper
+    # treats 404 as success, which keeps retries idempotent.
     k8s_client.delete_hpa(clients, namespace, deployment["k8s_hpa_name"])
     k8s_client.delete_service(clients, namespace, deployment["k8s_service_name"])
     k8s_client.delete_deployment(
@@ -77,6 +87,8 @@ def scale_model_deployment(
     replicas: int,
 ) -> Any:
     """Patch Deployment replicas for non-HPA scale operations."""
+    # Kubernetes exposes the scale subresource for lightweight replica changes
+    # without resending the full Deployment manifest.
     body = {
         "spec": {
             "replicas": replicas,

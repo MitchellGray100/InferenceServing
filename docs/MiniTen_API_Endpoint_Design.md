@@ -10,9 +10,10 @@ All public API endpoints are versioned under:
 
 ## API Categories
 
-MiniTen has seven API groups:
+MiniTen has nine API groups:
 
 ```text
+Health API
 Users API
 Auth API
 Projects API
@@ -25,6 +26,7 @@ Inference API
 
 | API Group | Purpose |
 |---|---|
+| Health API | Report API process liveness and readiness |
 | Users API | Create, read, and delete user accounts |
 | Auth API | Login/logout and token creation |
 | Projects API | Create, list, inspect, and delete projects |
@@ -78,6 +80,60 @@ GET /v1/models
 ```
 
 The project API key determines the project. The `model` field in the request body determines which named deployment inside that project receives the request.
+
+---
+
+# 0. Health API
+
+These endpoints are unauthenticated operational probes for local development,
+Docker, CI, and future Kubernetes/OCI health checks.
+
+## 0.1 Liveness
+
+```http
+GET /healthz
+```
+
+Returns `200` when the Flask process is alive.
+
+### Response
+
+```json
+{
+  "status": "ok"
+}
+```
+
+## 0.2 Readiness
+
+```http
+GET /readyz
+```
+
+Returns `200` when the API can reach required dependencies. The MVP readiness
+check verifies Postgres with a lightweight `SELECT 1`.
+
+### Ready response
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "postgres": "ok"
+  }
+}
+```
+
+### Not ready response
+
+```json
+{
+  "status": "not_ready",
+  "checks": {
+    "postgres": "error"
+  }
+}
+```
 
 ---
 

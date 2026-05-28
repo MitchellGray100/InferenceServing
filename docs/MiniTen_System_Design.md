@@ -4,6 +4,17 @@
 
 MiniTen is a multi-user inference serving platform for deploying open-source Hugging Face LLMs as vLLM workers on Kubernetes.
 
+The Flask API exposes unauthenticated operational probes:
+
+```text
+GET /healthz
+GET /readyz
+```
+
+`/healthz` reports process liveness. `/readyz` verifies the API can query
+Postgres and should be used by local smoke tests, Docker/CI checks, and future
+Kubernetes readiness probes for the control plane API.
+
 The platform lets users:
 
 - Sign up and log in.

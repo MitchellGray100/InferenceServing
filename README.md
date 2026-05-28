@@ -729,7 +729,8 @@ make clean
 Docker Compose, waits for it to accept connections, and applies migrations.
 `make clean-env` stops Compose services and removes the local Postgres volume.
 `make test-local-apis` runs HTTP smoke tests against a running local API, so
-start `make run-api` in another terminal first. If `setup-env` restarts
+start `make run-api` in another terminal first. The smoke test waits for
+`GET /readyz` before exercising authenticated endpoints. If `setup-env` restarts
 Postgres while the API is already running, restart `make run-api` so the local
 Flask process opens fresh database connections.
 

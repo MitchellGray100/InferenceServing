@@ -244,7 +244,7 @@ def ensure_api_is_running(client: SmokeClient) -> None:
 
     for _ in range(30):
         try:
-            client.request("GET", "/v1/projects", expected_status=401)
+            client.request("GET", "/readyz")
             return
         except requests.RequestException as exc:
             last_error = exc

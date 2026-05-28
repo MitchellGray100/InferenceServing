@@ -12,6 +12,7 @@ from app.routes import (
     api_keys,
     analytics,
     auth,
+    health,
     inference,
     model_deployments,
     project_members,
@@ -30,6 +31,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     configure_logging(app.config.get("LOG_LEVEL", "INFO"))
     register_request_logging(app)
     register_error_handlers(app)
+    app.register_blueprint(health.bp)
     app.register_blueprint(auth.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(projects.bp)

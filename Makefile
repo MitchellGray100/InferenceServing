@@ -1,7 +1,7 @@
 PYTHON ?= python
 POETRY ?= $(PYTHON) -m poetry
 
-.PHONY: install tests lint compile clean
+.PHONY: install tests coverage lint compile clean
 
 install:
 	$(PYTHON) -m pip install --upgrade pip poetry
@@ -9,6 +9,10 @@ install:
 
 tests:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(POETRY) run pytest
+
+coverage:
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(POETRY) run coverage run -m pytest
+	$(POETRY) run coverage report -m
 
 lint:
 	$(POETRY) run ruff check app tests

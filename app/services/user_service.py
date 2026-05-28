@@ -16,11 +16,17 @@ from app.utils.time import to_iso8601
 from app.utils.validation import normalize_email, validate_password, validate_uuid
 
 
+# User queries are kept in SQL files so password hashing and response shaping
+# stay in Python while persistence details remain reviewable as SQL.
 queries = load_queries()
 
 
 def create_user(email: Any, password: Any) -> dict[str, Any]:
-    """Create a user account and return public user fields."""
+    """Create a user account and return public user fields.
+
+    Password hashing happens before the insert so raw passwords never cross the
+    database boundary.
+    """
     normalized_email = normalize_email(email)
     plaintext_password = validate_password(password)
     hashed_password = hash_password(plaintext_password)
@@ -71,7 +77,12 @@ def get_user(user_id: Any) -> dict[str, Any]:
 
 
 def delete_user(user_id: Any) -> dict[str, bool]:
-    """Delete the authenticated user account."""
+    """Delete the authenticated user account.
+
+    Related project memberships and owned metadata rely on schema-level foreign
+    keys/cascades. Higher-level cleanup, such as Kubernetes resources, belongs
+    in deployment worker flows.
+    """
     canonical_user_id = validate_uuid(user_id, "userID")
 
     with transaction() as conn:
@@ -105,4 +116,5 @@ def serialize_user(row: Any) -> dict[str, Any]:
 
 
 def _is_unique_violation(exc: Exception) -> bool:
+    """Detect psycopg unique violations without importing psycopg globally."""
     return exc.__class__.__name__ == "UniqueViolation"

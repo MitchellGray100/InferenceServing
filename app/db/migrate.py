@@ -111,7 +111,7 @@ def migrate(database_url: str, directory: Path | None = None) -> list[str]:
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "psycopg is required to run migrations. Install project dependencies "
-            "with `pip install -r requirements.txt`."
+            "with `make install`."
         ) from exc
 
     directory = directory or migrations_dir()

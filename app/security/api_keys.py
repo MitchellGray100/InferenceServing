@@ -18,6 +18,8 @@ from flask import current_app
 from app.utils.errors import ApiError
 
 
+# Raw keys look like `mt_live_<visible>_<secret>`. The visible segment is stored
+# as `key_prefix` for candidate lookup; the secret segment is never stored.
 KEY_PREFIX = "mt_live"
 VISIBLE_TOKEN_BYTES = 9
 SECRET_TOKEN_BYTES = 24
@@ -25,7 +27,11 @@ HASH_ALGORITHM = "sha256"
 
 
 def generate_api_key() -> tuple[str, str]:
-    """Generate a raw API key and return it with its visible DB prefix."""
+    """Generate a raw API key and return it with its visible DB prefix.
+
+    The caller is responsible for showing the raw key once and storing only the
+    derived prefix plus `hash_api_key(raw_key)`.
+    """
     visible = _token(VISIBLE_TOKEN_BYTES)
     secret = _token(SECRET_TOKEN_BYTES)
     raw_key = f"{KEY_PREFIX}_{visible}_{secret}"
@@ -36,14 +42,23 @@ def derive_key_prefix(raw_key: str) -> str:
     """Return the non-secret lookup prefix embedded in a raw API key."""
     parts = raw_key.split("_", maxsplit=3)
 
-    if len(parts) != 4 or f"{parts[0]}_{parts[1]}" != KEY_PREFIX:
+    if (
+        len(parts) != 4
+        or f"{parts[0]}_{parts[1]}" != KEY_PREFIX
+        or not parts[2]
+        or not parts[3]
+    ):
         raise invalid_api_key_error()
 
     return f"{KEY_PREFIX}_{parts[2]}"
 
 
 def hash_api_key(raw_key: str, secret: str | None = None) -> str:
-    """Hash a raw API key using a server-side secret."""
+    """Hash a raw API key using a server-side secret.
+
+    This is a keyed HMAC, not a plain digest. If database rows leak without the
+    server secret, attackers still cannot efficiently test guessed keys.
+    """
     hash_secret = (secret or current_app.config["API_KEY_HASH_SECRET"]).encode()
     digest = hmac.new(hash_secret, raw_key.encode(), hashlib.sha256).hexdigest()
     return f"{HASH_ALGORITHM}:{digest}"
@@ -65,5 +80,9 @@ def invalid_api_key_error() -> ApiError:
 
 
 def _token(num_bytes: int) -> str:
-    """Return URL-safe random text without padding."""
-    return base64.urlsafe_b64encode(secrets.token_bytes(num_bytes)).decode().rstrip("=")
+    """Return URL-safe random text without padding.
+
+    Base32 avoids `_`, which is our raw key delimiter, while preserving the
+    entropy from `secrets.token_bytes`.
+    """
+    return base64.b32encode(secrets.token_bytes(num_bytes)).decode().rstrip("=").lower()

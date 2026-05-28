@@ -1216,30 +1216,30 @@ If the local or cloud cluster does not support a compatible shared volume mode, 
 3. Ensure name is unique within project.
 4. Insert model_deployments row with status = deploying.
 5. Insert deployment_jobs row with job_type = deploy_model.
-6. Insert model_events row: deploy_requested.
-7. Return queued/deploying deployment object.
+6. Return the deployment object and queued deployment job.
 ```
 
 ### Response
 
 ```json
 {
-  "modelDeploymentID": "7a16ad8b-3d7d-4dd3-9a63-c4e3bbf29c18",
-  "projectID": "a2fc41b7-862e-4060-b466-2376f29227bb",
-  "name": "qwen-small-prod",
-  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
-  "status": "deploying",
-  "k8s_deployment_name": "qwen-small-prod-v1",
-  "k8s_service_name": "qwen-small-prod",
-  "k8s_hpa_name": "qwen-small-prod-v1",
-  "replicas": 1,
-  "autoscaling": {
-    "enabled": true,
-    "min_replicas": 1,
-    "max_replicas": 3,
-    "target_cpu_utilization": 70
+  "modelDeployment": {
+    "modelDeploymentID": "7a16ad8b-3d7d-4dd3-9a63-c4e3bbf29c18",
+    "projectID": "a2fc41b7-862e-4060-b466-2376f29227bb",
+    "name": "qwen-small-prod",
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "status": "deploying",
+    "k8s_deployment_name": "qwen-small-prod-v1",
+    "k8s_service_name": "qwen-small-prod",
+    "k8s_hpa_name": "qwen-small-prod-v1",
+    "replicas": 1,
+    "created_at": "2026-05-17T12:00:00Z"
   },
-  "created_at": "2026-05-17T12:00:00Z"
+  "deploymentJob": {
+    "deploymentJobID": "3ef7d993-cb61-4392-b36b-2ed2e1d88af1",
+    "job_type": "deploy_model",
+    "status": "queued"
+  }
 }
 ```
 
@@ -1250,7 +1250,6 @@ projects
 project_members
 model_deployments
 deployment_jobs
-model_events
 ```
 
 ### Kubernetes actions
@@ -1319,7 +1318,7 @@ project_members
 ## 6.3 Get model
 
 ```http
-GET /v1/projects/{projectID}/models/{modelName}
+GET /v1/projects/{projectID}/models/{modelDeploymentID}
 ```
 
 ### Purpose
@@ -1387,23 +1386,21 @@ project_members
 
 ---
 
-## 6.4 Update model
+## 6.4 Scale model
 
 ```http
-PATCH /v1/projects/{projectID}/models/{modelName}
+POST /v1/projects/{projectID}/models/{modelDeploymentID}/scale
 ```
 
 ### Purpose
 
-Updates an existing model deployment's serving configuration.
+Updates the desired replica count for an existing model deployment.
 
 Used by:
 
 ```text
-Model settings page
-Autoscaling settings page
-Resource configuration page
-CLI update model command
+Model dashboard scale control
+CLI scale model command
 ```
 
 ### Auth
@@ -1420,24 +1417,7 @@ owner, member
 
 ```json
 {
-  "replicas": 3,
-  "resources": {
-    "cpu_request": "4",
-    "cpu_limit": "8",
-    "memory_request": "16Gi",
-    "memory_limit": "32Gi",
-    "gpu_count": 1
-  },
-  "vllm": {
-    "dtype": "float16",
-    "max_model_len": 8192
-  },
-  "autoscaling": {
-    "enabled": true,
-    "min_replicas": 1,
-    "max_replicas": 5,
-    "target_cpu_utilization": 70
-  }
+  "replicas": 3
 }
 ```
 
@@ -1445,61 +1425,29 @@ owner, member
 
 ```text
 1. Verify user is project owner or member.
-2. Find model by projectID + modelName.
-3. Validate requested changes.
-4. Update desired configuration in model_deployments.
-5. Insert deployment_jobs row with job_type = scale_model or sync_status, depending on the change.
-6. Insert model_events row such as model_scaled when the worker applies the change.
-7. Return queued/updated model.
+2. Find model by projectID + modelDeploymentID.
+3. Validate requested replica count.
+4. Update desired replicas in model_deployments.
+5. Insert deployment_jobs row with job_type = scale_model.
+6. Return the deployment object and queued deployment job.
 ```
 
 ### Important Rules
 
-Easy to patch:
-
-```text
-replicas
-cpu_request
-cpu_limit
-memory_request
-memory_limit
-autoscaling_enabled
-min_replicas
-max_replicas
-target_cpu_utilization
-```
-
-May require pod restart:
-
-```text
-gpu_count
-vllm_dtype
-vllm_max_model_len
-vllm_image
-```
-
-Should not be editable in-place:
-
-```text
-model_id
-```
-
-If the user wants a different Hugging Face model, they should create a new named deployment.
-
-If autoscaling is enabled, direct `replicas` updates should be rejected or ignored. Users should update `min_replicas` and `max_replicas` instead.
+This endpoint only changes the desired replica count for the MVP. Resource,
+vLLM, autoscaling, and model ID changes are intentionally deferred.
 
 ### Response
 
 ```json
 {
-  "name": "qwen-small-prod",
-  "status": "running",
-  "replicas": 3,
-  "autoscaling": {
-    "enabled": false,
-    "min_replicas": null,
-    "max_replicas": null,
-    "target_cpu_utilization": null
+  "modelDeployment": {
+    "name": "qwen-small-prod",
+    "replicas": 3
+  },
+  "deploymentJob": {
+    "job_type": "scale_model",
+    "status": "queued"
   }
 }
 ```
@@ -1509,14 +1457,13 @@ If autoscaling is enabled, direct `replicas` updates should be rejected or ignor
 ```text
 model_deployments
 deployment_jobs
-model_events
 ```
 
 ### Kubernetes actions
 
 ```text
 None directly in the request handler.
-The Deployment Worker patches Deployment and HPA resources, and restarts pods if required.
+The Deployment Worker patches Deployment and HPA resources.
 ```
 
 ---
@@ -1524,7 +1471,7 @@ The Deployment Worker patches Deployment and HPA resources, and restarts pods if
 ## 6.5 Start model
 
 ```http
-POST /v1/projects/{projectID}/models/{modelName}/start
+POST /v1/projects/{projectID}/models/{modelDeploymentID}/start
 ```
 
 ### Purpose
@@ -1562,21 +1509,24 @@ Optional:
 
 ```text
 1. Verify user is project owner or member.
-2. Find model by projectID + modelName.
+2. Find model by projectID + modelDeploymentID.
 3. Insert deployment_jobs row with job_type = start_model.
-4. Store requested replicas or autoscaling restore intent in the job payload.
-5. Update status to loading.
-6. Insert model_events row: model_started.
-7. Return queued/loading model.
+4. Update status to deploying.
+5. Return the deployment object and queued deployment job.
 ```
 
 ### Response
 
 ```json
 {
-  "name": "qwen-small-prod",
-  "status": "loading",
-  "replicas": 1
+  "modelDeployment": {
+    "name": "qwen-small-prod",
+    "status": "deploying"
+  },
+  "deploymentJob": {
+    "job_type": "start_model",
+    "status": "queued"
+  }
 }
 ```
 
@@ -1585,7 +1535,6 @@ Optional:
 ```text
 model_deployments
 deployment_jobs
-model_events
 ```
 
 ### Kubernetes actions
@@ -1600,7 +1549,7 @@ The Deployment Worker scales the Deployment up and restores HPA settings if need
 ## 6.6 Stop model
 
 ```http
-POST /v1/projects/{projectID}/models/{modelName}/stop
+POST /v1/projects/{projectID}/models/{modelDeploymentID}/stop
 ```
 
 ### Purpose
@@ -1629,21 +1578,24 @@ owner, member
 
 ```text
 1. Verify user is project owner or member.
-2. Find model by projectID + modelName.
+2. Find model by projectID + modelDeploymentID.
 3. Insert deployment_jobs row with job_type = stop_model.
-4. Store HPA suspension or min_replicas = 0 intent in the job payload when autoscaling is enabled.
-5. Update status = stopped or stopping-equivalent queued state.
-6. Insert model_events row: model_stopped.
-7. Return queued/stopped model.
+4. Update status = stopped.
+5. Return the deployment object and queued deployment job.
 ```
 
 ### Response
 
 ```json
 {
-  "name": "qwen-small-prod",
-  "status": "stopped",
-  "replicas": 0
+  "modelDeployment": {
+    "name": "qwen-small-prod",
+    "status": "stopped"
+  },
+  "deploymentJob": {
+    "job_type": "stop_model",
+    "status": "queued"
+  }
 }
 ```
 
@@ -1652,7 +1604,6 @@ owner, member
 ```text
 model_deployments
 deployment_jobs
-model_events
 ```
 
 ### Important Rule
@@ -1671,7 +1622,7 @@ The Deployment Worker handles HPA first, then scales the Deployment to zero.
 ## 6.7 Delete model
 
 ```http
-DELETE /v1/projects/{projectID}/models/{modelName}
+DELETE /v1/projects/{projectID}/models/{modelDeploymentID}
 ```
 
 ### Purpose
@@ -1699,18 +1650,24 @@ owner, member
 
 ```text
 1. Verify user is project owner or member.
-2. Find model by projectID + modelName.
+2. Find model by projectID + modelDeploymentID.
 3. Set status = deleting.
 4. Insert deployment_jobs row with job_type = delete_model.
-5. Insert model_events row: model_deleted when the worker finishes deletion.
-6. Return queued/deleting response.
+5. Return the deployment object and queued deployment job.
 ```
 
 ### Response
 
 ```json
 {
-  "deleted": true
+  "modelDeployment": {
+    "name": "qwen-small-prod",
+    "status": "deleting"
+  },
+  "deploymentJob": {
+    "job_type": "delete_model",
+    "status": "queued"
+  }
 }
 ```
 
@@ -1719,7 +1676,6 @@ owner, member
 ```text
 model_deployments
 deployment_jobs
-model_events
 ```
 
 ### Kubernetes actions
@@ -2338,7 +2294,7 @@ kubernetes_error
 | List API keys | Yes | Yes | Yes |
 | Revoke API key | Yes | Yes | No |
 | Deploy model | Yes | Yes | No |
-| Update model | Yes | Yes | No |
+| Scale model | Yes | Yes | No |
 | Start/stop model | Yes | Yes | No |
 | Delete model | Yes | Yes | No |
 | View logs | Yes | Yes | Yes |
@@ -2395,12 +2351,11 @@ DELETE /v1/projects/{projectID}/api-keys/{apiKeyID}
 ```http
 POST   /v1/projects/{projectID}/models
 GET    /v1/projects/{projectID}/models
-GET    /v1/projects/{projectID}/models/{modelName}
-PATCH  /v1/projects/{projectID}/models/{modelName}
-POST   /v1/projects/{projectID}/models/{modelName}/start
-POST   /v1/projects/{projectID}/models/{modelName}/stop
-DELETE /v1/projects/{projectID}/models/{modelName}
-GET    /v1/projects/{projectID}/models/{modelName}/logs
+GET    /v1/projects/{projectID}/models/{modelDeploymentID}
+POST   /v1/projects/{projectID}/models/{modelDeploymentID}/start
+POST   /v1/projects/{projectID}/models/{modelDeploymentID}/stop
+POST   /v1/projects/{projectID}/models/{modelDeploymentID}/scale
+DELETE /v1/projects/{projectID}/models/{modelDeploymentID}
 ```
 
 ## Analytics

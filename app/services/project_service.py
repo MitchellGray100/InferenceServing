@@ -1,6 +1,6 @@
 """Project business logic.
 
-This service will create projects, generate unique slugs/namespaces, and manage
+This service creates projects, generates unique slugs/namespaces, and manages
 project-level authorization checks.
 """
 
@@ -22,6 +22,8 @@ from app.utils.validation import (
 )
 
 
+# Project role sets are reused by other services so authorization rules stay
+# consistent across projects, API keys, and model deployments.
 queries = load_queries()
 WRITE_ROLES = {"owner", "member"}
 VIEW_ROLES = {"owner", "member", "viewer"}
@@ -429,4 +431,5 @@ def _join_slug_suffix(base_slug: str, suffix: str) -> str:
 
 
 def _is_unique_violation(exc: Exception) -> bool:
+    """Detect psycopg unique violations without importing psycopg globally."""
     return exc.__class__.__name__ == "UniqueViolation"

@@ -1,7 +1,7 @@
 """Authentication business logic.
 
-This service will normalize emails, verify password hashes, update login
-metadata, and issue user access tokens.
+This service normalizes emails, verifies password hashes, updates login
+metadata, and issues stateless user access tokens.
 """
 
 from __future__ import annotations
@@ -17,11 +17,18 @@ from app.utils.errors import ApiError, ValidationError
 from app.utils.validation import normalize_email, validate_string
 
 
+# Auth uses user queries because credentials live on the users table. Service
+# functions still return only public user fields through `serialize_user`.
 queries = load_queries()
 
 
 def login(email: Any, password: Any) -> dict[str, Any]:
-    """Authenticate a user and return a bearer token plus user info."""
+    """Authenticate a user and return a bearer token plus user info.
+
+    Validation errors are intentionally collapsed into the same
+    `invalid_credentials` response as password mismatch so login cannot be used
+    to enumerate registered emails or infer password policy details.
+    """
     try:
         normalized_email = normalize_email(email)
         plaintext_password = validate_string(password, "password")
@@ -56,7 +63,12 @@ def login(email: Any, password: Any) -> dict[str, Any]:
 
 
 def logout() -> dict[str, bool]:
-    """Return a consistent logout response for stateless bearer tokens."""
+    """Return a consistent logout response for stateless bearer tokens.
+
+    The MVP does not store server-side token sessions, so logout is a client
+    action: discard the bearer token. A token denylist can be added later if
+    the product needs immediate revocation before token expiry.
+    """
     return {"logged_out": True}
 
 

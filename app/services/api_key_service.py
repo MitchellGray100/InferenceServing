@@ -22,11 +22,18 @@ from app.utils.time import to_iso8601
 from app.utils.validation import validate_api_key_name, validate_uuid
 
 
+# API key queries intentionally never return `key_hash` except on the dedicated
+# verification lookup. List/create/revoke responses expose metadata only.
 queries = load_queries()
 
 
 def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
-    """Create a project API key for owners and members."""
+    """Create a project API key for owners and members.
+
+    The raw key is generated before the transaction but only returned after the
+    metadata row commits. The database stores a visible prefix and HMAC; it does
+    not store enough information to reconstruct the raw key.
+    """
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
     key_name = validate_api_key_name(name)
@@ -61,6 +68,10 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
             row = cur.fetchone()
 
     response = serialize_api_key(row)
+
+    # This is the only API response that includes the raw credential. All later
+    # reads use `serialize_api_key`, which deliberately omits `key_hash` and
+    # cannot recover `api_key`.
     response["api_key"] = raw_key
     return response
 
@@ -84,7 +95,11 @@ def list_api_keys(user_id: Any, project_id: Any) -> dict[str, list[dict[str, Any
 
 
 def revoke_api_key(user_id: Any, project_id: Any, api_key_id: Any) -> dict[str, bool]:
-    """Revoke a project API key for owners and members."""
+    """Revoke a project API key for owners and members.
+
+    Revocation is soft-delete style: `revoked_at` is set so historical
+    inference rows can still reference the key metadata.
+    """
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
     canonical_api_key_id = validate_uuid(api_key_id, "apiKeyID")
@@ -115,6 +130,8 @@ def authenticate_project_api_key(raw_key: str) -> dict[str, str]:
     candidates by visible prefix, verifies HMACs in constant time, and records
     successful use.
     """
+    # Prefix lookup narrows the candidate set without treating the prefix as a
+    # secret. The full raw key still has to match the stored HMAC.
     key_prefix = api_keys.derive_key_prefix(raw_key)
 
     with transaction() as conn:
@@ -162,8 +179,10 @@ def api_key_not_found_error() -> ApiError:
 
 
 def _optional_iso8601(value: Any) -> str | None:
+    """Serialize optional API key timestamps."""
     return to_iso8601(value) if value is not None else None
 
 
 def _is_unique_violation(exc: Exception) -> bool:
+    """Detect psycopg unique violations without importing psycopg globally."""
     return exc.__class__.__name__ == "UniqueViolation"

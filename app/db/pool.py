@@ -28,7 +28,7 @@ def create_pool(database_url: str | None = None, **kwargs: Any) -> Any:
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "psycopg_pool is required for database access. Install project "
-            "dependencies with `pip install -r requirements.txt`."
+            "dependencies with `make install`."
         ) from exc
 
     conninfo = database_url or Config.DATABASE_URL

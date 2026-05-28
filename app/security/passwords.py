@@ -3,3 +3,24 @@
 This module will wrap Argon2id or bcrypt so the rest of the app never handles
 plaintext passwords beyond request validation.
 """
+
+from __future__ import annotations
+
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError
+
+
+_hasher = PasswordHasher()
+
+
+def hash_password(password: str) -> str:
+    """Hash a plaintext password for storage."""
+    return _hasher.hash(password)
+
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    """Return whether a plaintext password matches a stored password hash."""
+    try:
+        return _hasher.verify(hashed_password, password)
+    except (VerifyMismatchError, VerificationError):
+        return False

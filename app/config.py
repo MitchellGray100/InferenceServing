@@ -12,7 +12,7 @@ class Config:
     """
 
     # Flask and authentication settings.
-    SECRET_KEY = os.getenv("SECRET_KEY", "dev")
+    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me-32-bytes")
     DATABASE_URL = os.getenv(
         "DATABASE_URL",
         "postgresql://miniten:miniten@localhost:5432/miniten",

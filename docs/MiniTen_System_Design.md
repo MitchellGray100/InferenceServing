@@ -202,6 +202,7 @@ Recommended service modules:
 
 ```text
 app/services/auth_service.py
+app/services/user_service.py
 app/services/project_service.py
 app/services/api_key_service.py
 app/services/model_deployment_service.py

@@ -738,6 +738,7 @@ app/
 
   services/
     auth_service.py
+    user_service.py
     project_service.py
     api_key_service.py
     model_deployment_service.py

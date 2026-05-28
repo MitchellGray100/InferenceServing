@@ -71,7 +71,7 @@ def login(email: Any, password: Any) -> dict[str, Any]:
         "user": serialize_user(user_row),
     }
 
-
+# TODO: Make log out invalidate the jwt and all endpoints must check if the jwt is valid.  
 def logout() -> dict[str, bool]:
     """Return a consistent logout response for stateless bearer tokens.
 

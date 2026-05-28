@@ -39,6 +39,7 @@ SUCCESS_MESSAGES = {
 }
 RUNNING_STATUSES = {"deploy_model": "running", "start_model": "running"}
 STOPPED_STATUSES = {"stop_model": "stopped"}
+SKIPPED_STATUS = "skipped"
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,10 @@ def process_claimed_job(
     """
     try:
         deployment = fetch_deployment_for_job(job)
+        if is_stale_job(job, deployment):
+            mark_job_skipped(job)
+            return SKIPPED_STATUS
+
         dispatch_job(clients, job, deployment)
         mark_job_succeeded(job, deployment)
         return "succeeded"
@@ -135,6 +140,13 @@ def fetch_deployment_for_job(job: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("model deployment not found for deployment job")
 
     return deployment
+
+
+def is_stale_job(job: dict[str, Any], deployment: dict[str, Any]) -> bool:
+    """Return whether a newer desired generation superseded this job."""
+    return int(job.get("desired_generation", 1)) != int(
+        deployment.get("desired_generation", 1)
+    )
 
 
 def dispatch_job(
@@ -206,6 +218,16 @@ def mark_job_succeeded(job: dict[str, Any], deployment: dict[str, Any]) -> None:
             )
             cur.execute(
                 queries.get("mark_deployment_job_succeeded"),
+                {"deployment_job_id": job["deployment_job_id"]},
+            )
+
+
+def mark_job_skipped(job: dict[str, Any]) -> None:
+    """Mark a stale job skipped without mutating Kubernetes or deployment state."""
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("mark_deployment_job_skipped"),
                 {"deployment_job_id": job["deployment_job_id"]},
             )
 

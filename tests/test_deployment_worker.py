@@ -19,6 +19,7 @@ def deployment_row() -> dict[str, object]:
         "k8s_service_name": "qwen-small-prod",
         "k8s_hpa_name": "qwen-small-prod-v1",
         "replicas": 3,
+        "desired_generation": 2,
         "autoscaling_enabled": True,
     }
 
@@ -34,6 +35,7 @@ def job_row(
         "project_id": PROJECT_ID,
         "model_deployment_id": MODEL_DEPLOYMENT_ID,
         "job_type": job_type,
+        "desired_generation": 2,
         "attempts": attempts,
         "max_attempts": max_attempts,
         "payload": {},
@@ -91,6 +93,42 @@ def test_process_claimed_job_success(monkeypatch) -> None:
 
     assert status == "succeeded"
     assert calls == ["dispatch", "success"]
+
+
+def test_process_claimed_job_skips_stale_generation(monkeypatch) -> None:
+    calls = []
+    stale_job = job_row()
+    stale_job["desired_generation"] = 1
+
+    monkeypatch.setattr(
+        deployment_worker,
+        "fetch_deployment_for_job",
+        lambda job: deployment_row(),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "dispatch_job",
+        lambda clients, job, deployment: calls.append("dispatch"),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "mark_job_skipped",
+        lambda job: calls.append("skipped"),
+    )
+
+    status = deployment_worker.process_claimed_job(FakeClients(), stale_job)
+
+    assert status == "skipped"
+    assert calls == ["skipped"]
+
+
+def test_is_stale_job_compares_desired_generation() -> None:
+    assert deployment_worker.is_stale_job(job_row(), deployment_row()) is False
+
+    stale_job = job_row()
+    stale_job["desired_generation"] = 1
+
+    assert deployment_worker.is_stale_job(stale_job, deployment_row()) is True
 
 
 def test_fetch_deployment_for_job_success(monkeypatch) -> None:
@@ -241,6 +279,15 @@ def test_update_deployment_status_with_cursor() -> None:
 
     assert row["model_deployment_id"] == MODEL_DEPLOYMENT_ID
     assert cursor.executed[0]["status"] == "running"
+
+
+def test_mark_job_skipped(monkeypatch) -> None:
+    fake = FakeTransaction(fetchone=job_row())
+    monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
+
+    deployment_worker.mark_job_skipped(job_row())
+
+    assert fake.cursor.executed[0]["deployment_job_id"] == JOB_ID
 
 
 class FakeClients:

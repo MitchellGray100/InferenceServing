@@ -1146,6 +1146,15 @@ These endpoints are for creating, updating, starting, stopping, deleting, and in
 
 They do not send inference prompts to models. Inference happens through `/v1/chat/completions`.
 
+Side-effecting model control-plane endpoints require an `Idempotency-Key`
+header. The same key with the same request replays the original response, while
+the same key with a different request returns `idempotency_key_conflict`.
+
+Each create/start/stop/scale/delete command stores a `desired_generation` on
+both `model_deployments` and `deployment_jobs`. The worker skips jobs whose
+generation is older than the current deployment generation, which prevents stale
+commands from applying after a newer desired state has been requested.
+
 ## 6.1 Deploy model
 
 ```http
@@ -1214,9 +1223,11 @@ If the local or cloud cluster does not support a compatible shared volume mode, 
 1. Verify user is project owner or member.
 2. Validate deployment name.
 3. Ensure name is unique within project.
-4. Insert model_deployments row with status = deploying.
-5. Insert deployment_jobs row with job_type = deploy_model.
-6. Return the deployment object and queued deployment job.
+4. Check or create the idempotency record from the required Idempotency-Key.
+5. Insert model_deployments row with status = deploying and desired_generation = 1.
+6. Insert deployment_jobs row with job_type = deploy_model and desired_generation = 1.
+7. Store the response in idempotency_keys when applicable.
+8. Return the deployment object and queued deployment job.
 ```
 
 ### Response
@@ -1233,11 +1244,13 @@ If the local or cloud cluster does not support a compatible shared volume mode, 
     "k8s_service_name": "qwen-small-prod",
     "k8s_hpa_name": "qwen-small-prod-v1",
     "replicas": 1,
+    "desired_generation": 1,
     "created_at": "2026-05-17T12:00:00Z"
   },
   "deploymentJob": {
     "deploymentJobID": "3ef7d993-cb61-4392-b36b-2ed2e1d88af1",
     "job_type": "deploy_model",
+    "desired_generation": 1,
     "status": "queued"
   }
 }
@@ -1427,9 +1440,10 @@ owner, member
 1. Verify user is project owner or member.
 2. Find model by projectID + modelDeploymentID.
 3. Validate requested replica count.
-4. Update desired replicas in model_deployments.
-5. Insert deployment_jobs row with job_type = scale_model.
-6. Return the deployment object and queued deployment job.
+4. Update desired replicas in model_deployments and increment desired_generation.
+5. Insert deployment_jobs row with job_type = scale_model and desired_generation.
+6. Store/replay idempotency response for the required Idempotency-Key.
+7. Return the deployment object and queued deployment job.
 ```
 
 ### Important Rules
@@ -1443,10 +1457,12 @@ vLLM, autoscaling, and model ID changes are intentionally deferred.
 {
   "modelDeployment": {
     "name": "qwen-small-prod",
-    "replicas": 3
+    "replicas": 3,
+    "desired_generation": 2
   },
   "deploymentJob": {
     "job_type": "scale_model",
+    "desired_generation": 2,
     "status": "queued"
   }
 }
@@ -1510,9 +1526,10 @@ Optional:
 ```text
 1. Verify user is project owner or member.
 2. Find model by projectID + modelDeploymentID.
-3. Insert deployment_jobs row with job_type = start_model.
-4. Update status to deploying.
-5. Return the deployment object and queued deployment job.
+3. Update status to deploying and increment desired_generation.
+4. Insert deployment_jobs row with job_type = start_model and desired_generation.
+5. Store/replay idempotency response for the required Idempotency-Key.
+6. Return the deployment object and queued deployment job.
 ```
 
 ### Response
@@ -1521,10 +1538,12 @@ Optional:
 {
   "modelDeployment": {
     "name": "qwen-small-prod",
-    "status": "deploying"
+    "status": "deploying",
+    "desired_generation": 2
   },
   "deploymentJob": {
     "job_type": "start_model",
+    "desired_generation": 2,
     "status": "queued"
   }
 }
@@ -1579,9 +1598,10 @@ owner, member
 ```text
 1. Verify user is project owner or member.
 2. Find model by projectID + modelDeploymentID.
-3. Insert deployment_jobs row with job_type = stop_model.
-4. Update status = stopped.
-5. Return the deployment object and queued deployment job.
+3. Update status = stopped and increment desired_generation.
+4. Insert deployment_jobs row with job_type = stop_model and desired_generation.
+5. Store/replay idempotency response for the required Idempotency-Key.
+6. Return the deployment object and queued deployment job.
 ```
 
 ### Response
@@ -1590,10 +1610,12 @@ owner, member
 {
   "modelDeployment": {
     "name": "qwen-small-prod",
-    "status": "stopped"
+    "status": "stopped",
+    "desired_generation": 2
   },
   "deploymentJob": {
     "job_type": "stop_model",
+    "desired_generation": 2,
     "status": "queued"
   }
 }
@@ -1651,9 +1673,10 @@ owner, member
 ```text
 1. Verify user is project owner or member.
 2. Find model by projectID + modelDeploymentID.
-3. Set status = deleting.
-4. Insert deployment_jobs row with job_type = delete_model.
-5. Return the deployment object and queued deployment job.
+3. Set status = deleting and increment desired_generation.
+4. Insert deployment_jobs row with job_type = delete_model and desired_generation.
+5. Store/replay idempotency response for the required Idempotency-Key.
+6. Return the deployment object and queued deployment job.
 ```
 
 ### Response

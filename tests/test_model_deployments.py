@@ -50,6 +50,18 @@ def auth_headers(app):
     return {"Authorization": f"Bearer {token}"}
 
 
+def idempotency_headers(auth_headers, key: str = "test-idempotency-key"):
+    return {**auth_headers, "Idempotency-Key": key}
+
+
+def bypass_idempotency(monkeypatch):
+    monkeypatch.setattr(
+        "app.routes.model_deployments.idempotency_service."
+        "run_idempotent_control_plane_request",
+        lambda **kwargs: kwargs["action"](),
+    )
+
+
 def model_deployment_response(status: str = "deploying") -> dict[str, object]:
     return {
         "modelDeploymentID": MODEL_DEPLOYMENT_ID,
@@ -62,6 +74,7 @@ def model_deployment_response(status: str = "deploying") -> dict[str, object]:
         "k8s_service_name": "qwen-small-prod",
         "k8s_hpa_name": "qwen-small-prod-v1",
         "replicas": 1,
+        "desired_generation": 1,
         "resources": {
             "cpu_request": "2",
             "cpu_limit": "4",
@@ -92,6 +105,7 @@ def deployment_job_response(job_type: str = "deploy_model") -> dict[str, object]
         "projectID": PROJECT_ID,
         "modelDeploymentID": MODEL_DEPLOYMENT_ID,
         "job_type": job_type,
+        "desired_generation": 1,
         "status": "queued",
         "attempts": 0,
         "max_attempts": 3,
@@ -109,6 +123,8 @@ def command_response(job_type: str = "deploy_model") -> dict[str, object]:
 
 
 def test_create_model_deployment_route(monkeypatch, client, auth_headers) -> None:
+    bypass_idempotency(monkeypatch)
+
     def create_model_deployment(user_id, project_id, data):
         assert user_id == USER_ID
         assert project_id == PROJECT_ID
@@ -124,7 +140,7 @@ def test_create_model_deployment_route(monkeypatch, client, auth_headers) -> Non
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models",
         json={"name": "qwen-small-prod", "model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
-        headers=auth_headers,
+        headers=idempotency_headers(auth_headers, "create-model"),
     )
 
     assert response.status_code == 201
@@ -176,6 +192,8 @@ def test_lifecycle_command_routes(
     method_name,
     job_type,
 ) -> None:
+    bypass_idempotency(monkeypatch)
+
     monkeypatch.setattr(
         f"app.routes.model_deployments.model_deployment_service.{method_name}",
         lambda user_id, project_id, model_deployment_id: command_response(job_type),
@@ -183,7 +201,7 @@ def test_lifecycle_command_routes(
 
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/{path_suffix}",
-        headers=auth_headers,
+        headers=idempotency_headers(auth_headers, path_suffix),
     )
 
     assert response.status_code == 202
@@ -191,6 +209,8 @@ def test_lifecycle_command_routes(
 
 
 def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None:
+    bypass_idempotency(monkeypatch)
+
     def scale_model_deployment(user_id, project_id, model_deployment_id, replicas):
         assert replicas == 3
         return command_response("scale_model")
@@ -204,7 +224,7 @@ def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/scale",
         json={"replicas": 3},
-        headers=auth_headers,
+        headers=idempotency_headers(auth_headers, "scale-model"),
     )
 
     assert response.status_code == 202
@@ -212,6 +232,8 @@ def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None
 
 
 def test_delete_model_deployment_route(monkeypatch, client, auth_headers) -> None:
+    bypass_idempotency(monkeypatch)
+
     monkeypatch.setattr(
         "app.routes.model_deployments.model_deployment_service."
         "delete_model_deployment",
@@ -220,7 +242,7 @@ def test_delete_model_deployment_route(monkeypatch, client, auth_headers) -> Non
 
     response = client.delete(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}",
-        headers=auth_headers,
+        headers=idempotency_headers(auth_headers, "delete-model"),
     )
 
     assert response.status_code == 202
@@ -232,6 +254,20 @@ def test_model_deployment_routes_require_auth(client) -> None:
 
     assert response.status_code == 401
     assert response.get_json()["error"]["type"] == "unauthorized"
+
+
+def test_model_deployment_command_routes_require_idempotency_key(
+    client,
+    auth_headers,
+) -> None:
+    response = client.post(
+        f"/v1/projects/{PROJECT_ID}/models",
+        json={"name": "qwen-small-prod", "model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["type"] == "missing_idempotency_key"
 
 
 def test_validate_deployment_spec_applies_defaults(app) -> None:
@@ -281,9 +317,10 @@ def test_serialize_model_deployment_and_job() -> None:
     job_row = {
         "deployment_job_id": DEPLOYMENT_JOB_ID,
         "project_id": PROJECT_ID,
-        "model_deployment_id": MODEL_DEPLOYMENT_ID,
-        "job_type": "deploy_model",
-        "status": "queued",
+            "model_deployment_id": MODEL_DEPLOYMENT_ID,
+            "job_type": "deploy_model",
+            "desired_generation": 1,
+            "status": "queued",
         "attempts": 0,
         "max_attempts": 3,
         "last_error": None,
@@ -327,6 +364,7 @@ def deployment_row_fixture() -> dict[str, object]:
         "k8s_service_name": "qwen-small-prod",
         "k8s_hpa_name": "qwen-small-prod-v1",
         "replicas": 1,
+        "desired_generation": 1,
         "cpu_request": "2",
         "cpu_limit": "4",
         "memory_request": "8Gi",

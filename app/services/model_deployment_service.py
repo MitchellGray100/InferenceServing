@@ -235,7 +235,7 @@ def scale_model_deployment(
                 raise model_deployment_not_found_error()
 
             cur.execute(
-                queries.get("update_model_deployment_replicas"),
+                queries.get("advance_model_deployment_replicas"),
                 {
                     "model_deployment_id": canonical_model_deployment_id,
                     "replicas": desired_replicas,
@@ -314,7 +314,7 @@ def lifecycle_command(
                 raise model_deployment_not_found_error()
 
             cur.execute(
-                queries.get("update_model_deployment_status"),
+                queries.get("advance_model_deployment_status"),
                 {
                     "model_deployment_id": canonical_model_deployment_id,
                     "status": requested_status,
@@ -539,6 +539,7 @@ def enqueue_deployment_job_with_cursor(
             "project_id": project_id,
             "model_deployment_id": model_deployment_id,
             "job_type": job_type,
+            "desired_generation": payload["desired_generation"],
             "payload": Jsonb(payload),
         },
     )
@@ -567,6 +568,7 @@ def build_job_payload(
         "k8s_service_name": deployment["k8s_service_name"],
         "k8s_hpa_name": deployment["k8s_hpa_name"],
         "replicas": deployment["replicas"],
+        "desired_generation": deployment.get("desired_generation", 1),
         "autoscaling_enabled": deployment["autoscaling_enabled"],
     }
 
@@ -589,6 +591,7 @@ def serialize_model_deployment(row: Any) -> dict[str, Any]:
         "k8s_service_name": row["k8s_service_name"],
         "k8s_hpa_name": row["k8s_hpa_name"],
         "replicas": row["replicas"],
+        "desired_generation": row.get("desired_generation", 1),
         "resources": {
             "cpu_request": row["cpu_request"],
             "cpu_limit": row["cpu_limit"],
@@ -622,6 +625,7 @@ def serialize_deployment_job(row: Any) -> dict[str, Any]:
         if row["model_deployment_id"] is not None
         else None,
         "job_type": row["job_type"],
+        "desired_generation": row.get("desired_generation", 1),
         "status": row["status"],
         "attempts": row["attempts"],
         "max_attempts": row["max_attempts"],

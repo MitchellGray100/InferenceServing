@@ -384,6 +384,8 @@ The Deployment Worker:
 
 - Polls `deployment_jobs`.
 - Claims queued jobs.
+- Compares job `desired_generation` with the current model deployment generation.
+- Marks stale jobs `skipped` without changing Kubernetes.
 - Calls the Kubernetes API.
 - Updates `model_deployments`.
 - Writes `model_events`.
@@ -898,8 +900,14 @@ start model
 stop model
 scale model
 delete model
-create API key
 ```
+
+Idempotency prevents duplicate jobs from client retries. Desired generations
+prevent older, already-queued jobs from applying after a newer command has been
+requested for the same model deployment.
+
+API key creation does not use idempotency in the MVP because replaying the
+response would require storing the raw API key.
 
 Not used for:
 

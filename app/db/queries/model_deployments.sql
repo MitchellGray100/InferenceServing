@@ -19,6 +19,7 @@ INSERT INTO model_deployments (
   k8s_service_name,
   k8s_hpa_name,
   replicas,
+  desired_generation,
   cpu_request,
   cpu_limit,
   memory_request,
@@ -43,6 +44,7 @@ VALUES (
   %(k8s_service_name)s,
   %(k8s_hpa_name)s,
   %(replicas)s,
+  1,
   %(cpu_request)s,
   %(cpu_limit)s,
   %(memory_request)s,
@@ -97,8 +99,8 @@ WHERE project_id = %(project_id)s
   AND deleted_at IS NULL;
 
 -- name: update_model_deployment_status
--- Status changes here represent requested/control-plane state. The worker will
--- later reconcile this with Kubernetes readiness and failures.
+-- Worker-facing status update. This does not advance desired_generation
+-- because it records observed/applied state, not a new user command.
 UPDATE model_deployments
 SET
   status = %(status)s,
@@ -106,12 +108,24 @@ SET
 WHERE model_deployment_id = %(model_deployment_id)s
 RETURNING *;
 
--- name: update_model_deployment_replicas
--- Store desired fixed replica count before queueing scale work. The worker is
--- responsible for applying this to the Deployment/HPA.
+-- name: advance_model_deployment_status
+-- Control-plane command update. Advancing desired_generation makes older
+-- deployment_jobs stale once a newer desired state has been requested.
+UPDATE model_deployments
+SET
+  status = %(status)s,
+  desired_generation = desired_generation + 1,
+  updated_at = CURRENT_TIMESTAMP
+WHERE model_deployment_id = %(model_deployment_id)s
+RETURNING *;
+
+-- name: advance_model_deployment_replicas
+-- Store desired fixed replica count before queueing scale work and advance the
+-- generation so older scale/lifecycle jobs cannot apply stale state.
 UPDATE model_deployments
 SET
   replicas = %(replicas)s,
+  desired_generation = desired_generation + 1,
   updated_at = CURRENT_TIMESTAMP
 WHERE model_deployment_id = %(model_deployment_id)s
 RETURNING *;

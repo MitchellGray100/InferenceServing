@@ -70,6 +70,7 @@ CREATE TABLE model_deployments (
   k8s_hpa_name TEXT,
 
   replicas INTEGER NOT NULL DEFAULT 1,
+  desired_generation INTEGER NOT NULL DEFAULT 1,
 
   cpu_request TEXT,
   cpu_limit TEXT,
@@ -215,9 +216,11 @@ CREATE TABLE deployment_jobs (
     'running',
     'succeeded',
     'failed',
-    'retrying'
+    'retrying',
+    'skipped'
   )),
 
+  desired_generation INTEGER NOT NULL DEFAULT 1,
   payload JSONB NOT NULL DEFAULT '{}',
 
   attempts INTEGER NOT NULL DEFAULT 0,

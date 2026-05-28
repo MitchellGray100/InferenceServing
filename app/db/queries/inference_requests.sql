@@ -6,6 +6,8 @@
 -- - fetch recent request history without prompts or responses
 
 -- name: create_inference_request
+-- Insert lightweight request metadata for analytics. Prompts and generated
+-- responses are intentionally not stored.
 INSERT INTO inference_requests (
   project_id,
   model_deployment_id,
@@ -31,6 +33,7 @@ VALUES (
 RETURNING *;
 
 -- name: list_recent_inference_requests
+-- Return recent request records for model request history views.
 SELECT *
 FROM inference_requests
 WHERE model_deployment_id = %(model_deployment_id)s
@@ -38,6 +41,8 @@ ORDER BY created_at DESC
 LIMIT %(limit)s;
 
 -- name: get_model_inference_metrics
+-- Aggregate basic request counts and latency for one model. Optional `since`
+-- bounds the time window when analytics callers provide it.
 SELECT
   COUNT(*) AS request_count,
   COUNT(*) FILTER (WHERE status_code >= 200 AND status_code < 400) AS success_count,

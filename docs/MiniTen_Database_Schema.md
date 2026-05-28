@@ -288,6 +288,7 @@ CREATE TABLE model_deployments (
 
   -- Runtime configuration
   replicas INTEGER NOT NULL DEFAULT 1,
+  desired_generation INTEGER NOT NULL DEFAULT 1,
 
   cpu_request TEXT,
   cpu_limit TEXT,
@@ -331,6 +332,7 @@ CREATE TABLE model_deployments (
 | `k8s_service_name` | `TEXT` | Yes | Kubernetes Service name. |
 | `k8s_hpa_name` | `TEXT` | No | Kubernetes HPA name, if autoscaling is enabled. |
 | `replicas` | `INTEGER` | Yes | Desired replica count when autoscaling is disabled. |
+| `desired_generation` | `INTEGER` | Yes | Monotonic desired-state version used to skip stale deployment jobs. |
 | `cpu_request` | `TEXT` | No | Kubernetes CPU request. Example: `2`. |
 | `cpu_limit` | `TEXT` | No | Kubernetes CPU limit. Example: `4`. |
 | `memory_request` | `TEXT` | No | Kubernetes memory request. Example: `8Gi`. |
@@ -619,7 +621,6 @@ start model
 stop model
 scale model
 delete model
-create API key
 ```
 
 This table answers:
@@ -685,6 +686,8 @@ Clients provide idempotency keys with this header:
 ```http
 Idempotency-Key: deploy-qwen-small-prod-001
 ```
+
+Model lifecycle command endpoints require this header in the MVP.
 
 Recommended client behavior:
 
@@ -816,16 +819,12 @@ Body:
 
 Retries should return the same response instead of repeatedly issuing scale operations.
 
-### Create API Key
+### API Key Creation
 
-```http
-POST /v1/projects/{projectID}/api-keys
-Idempotency-Key: create-local-dev-key-001
-```
-
-API key creation has one caveat: the raw API key is usually shown only once.
-
-For the MVP, the simplest behavior is to store and replay the original response during the idempotency window.
+API key creation does not use idempotency in the MVP because replay storage
+would persist the raw API key in `idempotency_keys.response_body`. API key
+creation is instead protected by unique key names, unique key hashes, and
+server-side retry on generated key hash collision.
 
 ## Where This Table Is Used
 
@@ -833,7 +832,6 @@ This table is primarily used by control-plane services:
 
 ```text
 Model Deployments Service
-API Keys Service
 Project Service, optional
 Project Members Service, optional
 ```
@@ -859,7 +857,7 @@ WHERE expires_at < NOW();
 
 ## Important Notes
 
-- Use idempotency for operations with side effects.
+- Use idempotency for model lifecycle operations with side effects.
 - Do not use idempotency for normal model inference requests in the MVP.
 - Store the original response so retries can receive the same result.
 - Return `409 Conflict` if the same key is reused with a different request.
@@ -921,9 +919,11 @@ CREATE TABLE deployment_jobs (
     'running',
     'succeeded',
     'failed',
-    'retrying'
+    'retrying',
+    'skipped'
   )),
 
+  desired_generation INTEGER NOT NULL DEFAULT 1,
   payload JSONB NOT NULL DEFAULT '{}',
 
   attempts INTEGER NOT NULL DEFAULT 0,
@@ -947,6 +947,7 @@ CREATE TABLE deployment_jobs (
 | `model_deployment_id` | `UUID` | No | Model deployment this job targets. Nullable for jobs that may run before a deployment row fully exists. |
 | `job_type` | `TEXT` | Yes | Type of lifecycle operation to perform. |
 | `status` | `TEXT` | Yes | Current job status. |
+| `desired_generation` | `INTEGER` | Yes | Deployment desired generation this job is allowed to apply. |
 | `payload` | `JSONB` | Yes | Operation-specific details needed by the worker. |
 | `attempts` | `INTEGER` | Yes | Number of times the worker has attempted the job. |
 | `max_attempts` | `INTEGER` | Yes | Maximum attempts before marking the job failed. |
@@ -988,6 +989,7 @@ running
 succeeded
 failed
 retrying
+skipped
 ```
 
 | Status | Meaning |
@@ -997,6 +999,7 @@ retrying
 | `succeeded` | Job completed successfully. |
 | `failed` | Job failed and has no attempts remaining. |
 | `retrying` | Job failed but can be retried. |
+| `skipped` | Job was superseded by a newer desired generation before it changed Kubernetes. |
 
 ## How It Works
 
@@ -1035,6 +1038,10 @@ Worker writes model_events
   ↓
 Worker marks job succeeded or failed
 ```
+
+Before the worker calls Kubernetes, it compares the job's `desired_generation`
+to the current `model_deployments.desired_generation`. If the values differ,
+the job is stale and is marked `skipped` without changing Kubernetes state.
 
 ## Example Job Payloads
 
@@ -1137,7 +1144,8 @@ attempts >= max_attempts
 
 ## Relationship to Idempotency
 
-`deployment_jobs` should work together with `idempotency_keys`.
+`deployment_jobs` should work together with `idempotency_keys` and
+`model_deployments.desired_generation`.
 
 Recommended deploy flow:
 
@@ -1156,6 +1164,12 @@ Deployment Worker processes the job asynchronously
 ```
 
 This prevents duplicate jobs if the client retries the same request.
+
+The deployment service increments `model_deployments.desired_generation` every
+time a new desired state is requested. The generated `deployment_jobs` row
+stores the same generation. Before the worker mutates Kubernetes, it compares
+the job generation with the current deployment generation. If they differ, the
+job is older than the latest requested state and is marked `skipped`.
 
 ## Relationship to Model Events
 
@@ -1438,6 +1452,7 @@ CREATE TABLE model_deployments (
   k8s_hpa_name TEXT,
 
   replicas INTEGER NOT NULL DEFAULT 1,
+  desired_generation INTEGER NOT NULL DEFAULT 1,
 
   cpu_request TEXT,
   cpu_limit TEXT,
@@ -1577,9 +1592,11 @@ CREATE TABLE deployment_jobs (
     'running',
     'succeeded',
     'failed',
-    'retrying'
+    'retrying',
+    'skipped'
   )),
 
+  desired_generation INTEGER NOT NULL DEFAULT 1,
   payload JSONB NOT NULL DEFAULT '{}',
 
   attempts INTEGER NOT NULL DEFAULT 0,

@@ -9,7 +9,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from app.security.tokens import current_user_id, require_user_auth
-from app.services import model_deployment_service
+from app.services import idempotency_service, model_deployment_service
 from app.utils.validation import require_field, require_json_object
 
 
@@ -23,12 +23,24 @@ bp = Blueprint("model_deployments", __name__, url_prefix="/v1/projects")
 def create_model_deployment(project_id: str) -> tuple[object, int]:
     """Create model deployment metadata and enqueue deploy work."""
     data = require_json_object(request.get_json(silent=True))
-    response = model_deployment_service.create_model_deployment(
-        user_id=current_user_id(),
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
         project_id=project_id,
-        data=data,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body=data,
+        action=lambda: (
+            model_deployment_service.create_model_deployment(
+                user_id=user_id,
+                project_id=project_id,
+                data=data,
+            ),
+            201,
+        ),
     )
-    return jsonify(response), 201
+    return jsonify(response), status
 
 
 @bp.get("/<project_id>/models")
@@ -68,12 +80,24 @@ def start_model_deployment(
     Command endpoints return 202 because Kubernetes work happens asynchronously
     in the deployment worker after the job row is committed.
     """
-    response = model_deployment_service.start_model_deployment(
-        current_user_id(),
-        project_id,
-        model_deployment_id,
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
+        project_id=project_id,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body={},
+        action=lambda: (
+            model_deployment_service.start_model_deployment(
+                user_id,
+                project_id,
+                model_deployment_id,
+            ),
+            202,
+        ),
     )
-    return jsonify(response), 202
+    return jsonify(response), status
 
 
 @bp.post("/<project_id>/models/<model_deployment_id>/stop")
@@ -87,12 +111,24 @@ def stop_model_deployment(
     The API response confirms the command has been queued, not that Kubernetes
     has already scaled the deployment down.
     """
-    response = model_deployment_service.stop_model_deployment(
-        current_user_id(),
-        project_id,
-        model_deployment_id,
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
+        project_id=project_id,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body={},
+        action=lambda: (
+            model_deployment_service.stop_model_deployment(
+                user_id,
+                project_id,
+                model_deployment_id,
+            ),
+            202,
+        ),
     )
-    return jsonify(response), 202
+    return jsonify(response), status
 
 
 @bp.post("/<project_id>/models/<model_deployment_id>/scale")
@@ -107,13 +143,25 @@ def scale_model_deployment(
     command with one required `replicas` field.
     """
     data = require_json_object(request.get_json(silent=True))
-    response = model_deployment_service.scale_model_deployment(
-        user_id=current_user_id(),
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
         project_id=project_id,
-        model_deployment_id=model_deployment_id,
-        replicas=require_field(data, "replicas"),
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body=data,
+        action=lambda: (
+            model_deployment_service.scale_model_deployment(
+                user_id=user_id,
+                project_id=project_id,
+                model_deployment_id=model_deployment_id,
+                replicas=require_field(data, "replicas"),
+            ),
+            202,
+        ),
     )
-    return jsonify(response), 202
+    return jsonify(response), status
 
 
 @bp.delete("/<project_id>/models/<model_deployment_id>")
@@ -127,9 +175,21 @@ def delete_model_deployment(
     Deletion is asynchronous so the worker can remove Kubernetes resources
     before the database row is finally marked deleted.
     """
-    response = model_deployment_service.delete_model_deployment(
-        current_user_id(),
-        project_id,
-        model_deployment_id,
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
+        project_id=project_id,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body={},
+        action=lambda: (
+            model_deployment_service.delete_model_deployment(
+                user_id,
+                project_id,
+                model_deployment_id,
+            ),
+            202,
+        ),
     )
-    return jsonify(response), 202
+    return jsonify(response), status

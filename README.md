@@ -621,6 +621,10 @@ The job queue is for control-plane operations only.
 
 Normal chat/inference requests do not use this queue.
 
+Each model control-plane command increments `model_deployments.desired_generation`
+and stores that generation on the queued job. Older jobs remain in history but
+are marked `skipped` if a newer desired state has already superseded them.
+
 ---
 
 ## Idempotency
@@ -635,7 +639,6 @@ start model
 stop model
 scale model
 delete model
-create API key
 ```
 
 Example:
@@ -651,6 +654,8 @@ Retry behavior:
 same key + same request body    → return original response
 same key + different body       → return 409 Conflict
 ```
+
+Model deploy/start/stop/scale/delete routes require `Idempotency-Key`.
 
 Idempotency is not used for normal inference requests in the MVP.
 

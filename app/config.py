@@ -2,6 +2,13 @@
 
 import os
 
+from dotenv import load_dotenv
+
+
+# Load local `.env` values before the Config class evaluates environment
+# variables. Real deployment environments should provide these values directly.
+load_dotenv()
+
 
 class Config:
     """Runtime settings shared by Flask routes, services, and workers.
@@ -37,3 +44,13 @@ class Config:
     INFERENCE_UPSTREAM_TIMEOUT_SECONDS = int(
         os.getenv("INFERENCE_UPSTREAM_TIMEOUT_SECONDS", "300")
     )
+
+    # Runtime process defaults.
+    API_HOST = os.getenv("API_HOST", "0.0.0.0")
+    API_PORT = int(os.getenv("API_PORT", "8000"))
+    API_DEBUG = os.getenv("API_DEBUG", "true").lower() in {"1", "true", "yes", "on"}
+    WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "2"))
+    WORKER_POLL_INTERVAL_SECONDS = float(
+        os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2.0")
+    )
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

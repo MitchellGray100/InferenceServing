@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import secrets
 
 from flask import current_app
@@ -24,6 +25,7 @@ KEY_PREFIX = "mt_live"
 VISIBLE_TOKEN_BYTES = 9
 SECRET_TOKEN_BYTES = 24
 HASH_ALGORITHM = "sha256"
+logger = logging.getLogger(__name__)
 
 
 def generate_api_key() -> tuple[str, str]:
@@ -37,6 +39,7 @@ def generate_api_key() -> tuple[str, str]:
     visible = _token(VISIBLE_TOKEN_BYTES)
     secret = _token(SECRET_TOKEN_BYTES)
     raw_key = f"{KEY_PREFIX}_{visible}_{secret}"
+    logger.debug("Generated project API key material.")
     return raw_key, derive_key_prefix(raw_key)
 
 
@@ -52,6 +55,7 @@ def derive_key_prefix(raw_key: str) -> str:
         or not parts[2]
         or not parts[3]
     ):
+        logger.debug("Rejected malformed project API key while deriving prefix.")
         raise invalid_api_key_error()
 
     return f"{KEY_PREFIX}_{parts[2]}"
@@ -74,7 +78,10 @@ def verify_api_key(raw_key: str, stored_hash: str, secret: str | None = None) ->
     """Constant-time comparison of a raw API key against a stored HMAC."""
     # `compare_digest` avoids timing leaks from early string comparison exits.
     expected_hash = hash_api_key(raw_key, secret)
-    return hmac.compare_digest(expected_hash, stored_hash)
+    verified = hmac.compare_digest(expected_hash, stored_hash)
+    if not verified:
+        logger.debug("Project API key hash verification failed.")
+    return verified
 
 
 def invalid_api_key_error() -> ApiError:

@@ -19,6 +19,7 @@ from app.routes import (
     users,
 )
 from app.utils.errors import register_error_handlers
+from app.utils.logging import configure_logging, register_request_logging
 
 
 def create_app(config_class: type[Config] = Config) -> Flask:
@@ -26,6 +27,8 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    configure_logging(app.config.get("LOG_LEVEL", "INFO"))
+    register_request_logging(app)
     register_error_handlers(app)
     app.register_blueprint(auth.bp)
     app.register_blueprint(users.bp)

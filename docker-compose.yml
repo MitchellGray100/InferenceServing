@@ -12,5 +12,46 @@ services:
       # Keep local database data across container restarts.
       - postgres_data:/var/lib/postgresql/data
 
+  api:
+    # Flask API/dashboard process. Build this after `poetry lock` is current.
+    build: .
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgresql://miniten:miniten@postgres:5432/miniten
+      SECRET_KEY: dev-secret-key-change-me-32-bytes
+      API_KEY_HASH_SECRET: dev-api-key-hash-secret-change-me-32-bytes
+      WEB_CONCURRENCY: 2
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    command:
+      [
+        "gunicorn",
+        "--bind",
+        "0.0.0.0:8000",
+        "--workers",
+        "2",
+        "wsgi:app",
+      ]
+
+  worker:
+    # MVP: run exactly one deployment worker process. Do not scale this service
+    # until per-model worker serialization and lease renewal are implemented.
+    build: .
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgresql://miniten:miniten@postgres:5432/miniten
+      SECRET_KEY: dev-secret-key-change-me-32-bytes
+      API_KEY_HASH_SECRET: dev-api-key-hash-secret-change-me-32-bytes
+      WORKER_POLL_INTERVAL_SECONDS: 2.0
+      KUBECONFIG: /root/.kube/config
+      LOG_LEVEL: INFO
+    volumes:
+      # Lets the worker talk to a local kind/minikube cluster from Docker.
+      - ${USERPROFILE}/.kube:/root/.kube:ro
+    command: ["python", "-m", "app.services.deployment_worker"]
+
 volumes:
   postgres_data:

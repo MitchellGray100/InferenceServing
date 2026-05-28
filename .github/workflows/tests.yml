@@ -25,3 +25,41 @@ jobs:
 
       - name: Run tests
         run: make tests
+
+  local-api-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up local environment
+        run: make setup-env
+
+      - name: Start local API
+        run: |
+          API_DEBUG=false make run-api > /tmp/miniten-api.log 2>&1 &
+          echo $! > /tmp/miniten-api.pid
+
+      - name: Run local API smoke tests
+        run: make test-local-apis
+
+      - name: Print API logs on failure
+        if: failure()
+        run: cat /tmp/miniten-api.log || true
+
+      - name: Stop local API
+        if: always()
+        run: |
+          if [ -f /tmp/miniten-api.pid ]; then
+            kill "$(cat /tmp/miniten-api.pid)" || true
+          fi
+
+      - name: Clean local environment
+        if: always()
+        run: make clean-env

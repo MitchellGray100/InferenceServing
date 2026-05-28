@@ -6,6 +6,7 @@ metadata, and issues stateless user access tokens.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.db.pool import transaction
@@ -20,6 +21,7 @@ from app.utils.validation import normalize_email, validate_string
 # Auth uses user queries because credentials live on the users table. Service
 # functions still return only public user fields through `serialize_user`.
 queries = load_queries()
+logger = logging.getLogger(__name__)
 
 
 def login(email: Any, password: Any) -> dict[str, Any]:
@@ -35,6 +37,7 @@ def login(email: Any, password: Any) -> dict[str, Any]:
         normalized_email = normalize_email(email)
         plaintext_password = validate_string(password, "password")
     except ValidationError as exc:
+        logger.info("Login rejected during credential validation.")
         raise invalid_credentials_error() from exc
 
     with transaction() as conn:
@@ -53,6 +56,7 @@ def login(email: Any, password: Any) -> dict[str, Any]:
                 plaintext_password,
                 auth_row["hashed_password"],
             ):
+                logger.info("Login rejected for email=%s.", normalized_email)
                 raise invalid_credentials_error()
 
             # Record successful login time after the password check so failed
@@ -63,6 +67,7 @@ def login(email: Any, password: Any) -> dict[str, Any]:
             )
             user_row = cur.fetchone()
 
+    logger.info("Login succeeded user_id=%s.", auth_row["user_id"])
     return {
         # Tokens are stateless JWTs. The client stores and presents this value
         # in `Authorization: Bearer ...` for control-plane requests.
@@ -79,6 +84,7 @@ def logout() -> dict[str, bool]:
     action: discard the bearer token. A token denylist can be added later if
     the product needs immediate revocation before token expiry.
     """
+    logger.info("Logout acknowledged for stateless bearer token.")
     return {"logged_out": True}
 
 

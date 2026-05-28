@@ -6,6 +6,7 @@ records through named SQL queries.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.db.pool import transaction
@@ -19,6 +20,7 @@ from app.utils.validation import normalize_email, validate_password, validate_uu
 # User queries are kept in SQL files so password hashing and response shaping
 # stay in Python while persistence details remain reviewable as SQL.
 queries = load_queries()
+logger = logging.getLogger(__name__)
 
 
 def create_user(email: Any, password: Any) -> dict[str, Any]:
@@ -48,6 +50,7 @@ def create_user(email: Any, password: Any) -> dict[str, Any]:
                 row = cur.fetchone()
     except Exception as exc:
         if _is_unique_violation(exc):
+            logger.info("User creation rejected because email already exists.")
             raise ApiError(
                 type="email_already_exists",
                 message="A user with this email already exists.",
@@ -55,6 +58,7 @@ def create_user(email: Any, password: Any) -> dict[str, Any]:
             ) from exc
         raise
 
+    logger.info("Created user user_id=%s.", row["user_id"])
     return serialize_user(row)
 
 
@@ -75,12 +79,14 @@ def get_user(user_id: Any) -> dict[str, Any]:
             row = cur.fetchone()
 
     if row is None:
+        logger.info("User lookup missed user_id=%s.", canonical_user_id)
         raise ApiError(
             type="user_not_found",
             message="User not found.",
             status_code=404,
         )
 
+    logger.debug("Fetched user user_id=%s.", canonical_user_id)
     return serialize_user(row)
 
 
@@ -106,12 +112,14 @@ def delete_user(user_id: Any) -> dict[str, bool]:
             row = cur.fetchone()
 
     if row is None:
+        logger.info("User delete missed user_id=%s.", canonical_user_id)
         raise ApiError(
             type="user_not_found",
             message="User not found.",
             status_code=404,
         )
 
+    logger.info("Deleted user user_id=%s.", canonical_user_id)
     return {"deleted": True}
 
 

@@ -6,6 +6,7 @@ project-level authorization checks.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.config import Config
@@ -25,6 +26,7 @@ from app.utils.validation import (
 # Project role sets are reused by other services so authorization rules stay
 # consistent across projects, API keys, and model deployments.
 queries = load_queries()
+logger = logging.getLogger(__name__)
 WRITE_ROLES = {"owner", "member"}
 VIEW_ROLES = {"owner", "member", "viewer"}
 
@@ -56,6 +58,11 @@ def create_project(user_id: Any, name: Any) -> dict[str, Any]:
                 },
             )
 
+    logger.info(
+        "Created project project_id=%s owner_user_id=%s.",
+        project_row["project_id"],
+        canonical_user_id,
+    )
     return serialize_project(project_row, role="owner")
 
 
@@ -71,6 +78,7 @@ def list_projects(user_id: Any) -> dict[str, list[dict[str, Any]]]:
             )
             rows = cur.fetchall()
 
+    logger.debug("Listed projects user_id=%s count=%s.", canonical_user_id, len(rows))
     return {"projects": [serialize_project(row, role=row["role"]) for row in rows]}
 
 
@@ -91,8 +99,14 @@ def get_project(user_id: Any, project_id: Any) -> dict[str, Any]:
             row = cur.fetchone()
 
     if row is None:
+        logger.info(
+            "Project lookup missed project_id=%s user_id=%s.",
+            canonical_project_id,
+            canonical_user_id,
+        )
         raise project_not_found_error()
 
+    logger.debug("Fetched project project_id=%s.", canonical_project_id)
     return serialize_project(row, role=row["role"])
 
 
@@ -116,8 +130,14 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
             row = cur.fetchone()
 
     if row is None:
+        logger.info("Project delete missed project_id=%s.", canonical_project_id)
         raise project_not_found_error()
 
+    logger.info(
+        "Deleted project project_id=%s user_id=%s.",
+        canonical_project_id,
+        canonical_user_id,
+    )
     return {"deleted": True}
 
 
@@ -136,6 +156,11 @@ def list_project_members(user_id: Any, project_id: Any) -> dict[str, list[dict[s
             )
             rows = cur.fetchall()
 
+    logger.debug(
+        "Listed project members project_id=%s count=%s.",
+        canonical_project_id,
+        len(rows),
+    )
     return {"members": [serialize_member(row) for row in rows]}
 
 
@@ -170,6 +195,10 @@ def add_project_member(
             target_user = cur.fetchone()
 
             if target_user is None:
+                logger.info(
+                    "Add project member missed target email project_id=%s.",
+                    canonical_project_id,
+                )
                 raise ApiError(
                     type="user_not_found",
                     message="No user exists with that email.",
@@ -187,6 +216,11 @@ def add_project_member(
                 )
             except Exception as exc:
                 if _is_unique_violation(exc):
+                    logger.info(
+                        "Add project member rejected duplicate project_id=%s target_user_id=%s.",
+                        canonical_project_id,
+                        target_user["user_id"],
+                    )
                     raise ApiError(
                         type="validation_error",
                         message="User is already a member of this project.",
@@ -196,6 +230,12 @@ def add_project_member(
 
             membership = cur.fetchone()
 
+    logger.info(
+        "Added project member project_id=%s target_user_id=%s role=%s.",
+        canonical_project_id,
+        target_user["user_id"],
+        member_role,
+    )
     return serialize_member({**target_user, "role": membership["role"], "created_at": membership["created_at"]})
 
 
@@ -226,6 +266,11 @@ def update_project_member_role(
             )
 
             if existing_member is None:
+                logger.info(
+                    "Update project member missed project_id=%s target_user_id=%s.",
+                    canonical_project_id,
+                    canonical_target_user_id,
+                )
                 raise ApiError(
                     type="user_not_found",
                     message="User is not a member of this project.",
@@ -247,6 +292,12 @@ def update_project_member_role(
             )
             updated_membership = cur.fetchone()
 
+    logger.info(
+        "Updated project member role project_id=%s target_user_id=%s role=%s.",
+        canonical_project_id,
+        canonical_target_user_id,
+        new_role,
+    )
     return serialize_member(
         {
             **existing_member,
@@ -281,6 +332,11 @@ def remove_project_member(
             )
 
             if existing_member is None:
+                logger.info(
+                    "Remove project member missed project_id=%s target_user_id=%s.",
+                    canonical_project_id,
+                    canonical_target_user_id,
+                )
                 raise ApiError(
                     type="user_not_found",
                     message="User is not a member of this project.",
@@ -300,6 +356,11 @@ def remove_project_member(
                 },
             )
 
+    logger.info(
+        "Removed project member project_id=%s target_user_id=%s.",
+        canonical_project_id,
+        canonical_target_user_id,
+    )
     return {"removed": True}
 
 
@@ -335,9 +396,11 @@ def require_role(role: str | None, allowed_roles: set[str]) -> None:
     whether a project exists outside their access boundary.
     """
     if role is None:
+        logger.info("Project role check failed because membership is missing.")
         raise project_not_found_error()
 
     if role not in allowed_roles:
+        logger.info("Project role check forbidden role=%s allowed=%s.", role, sorted(allowed_roles))
         raise ApiError(
             type="forbidden",
             message="You do not have permission to perform this action.",
@@ -354,6 +417,7 @@ def ensure_not_last_owner(cur: Any, project_id: str) -> None:
     row = cur.fetchone()
 
     if row["owner_count"] <= 1:
+        logger.info("Last owner protection rejected project_id=%s.", project_id)
         raise ApiError(
             type="validation_error",
             message="A project must have at least one owner.",
@@ -411,6 +475,7 @@ def _insert_project_with_unique_slug(cur: Any, name: str, base_slug: str) -> Any
         except Exception as exc:
             if not _is_unique_violation(exc):
                 raise
+            logger.info("Project slug collision slug=%s.", slug)
 
     raise ApiError(
         type="validation_error",

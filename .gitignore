@@ -24,6 +24,7 @@ dist/
 *.egg-info/
 
 # Local databases and logs
+.local/
 *.db
 *.sqlite
 *.sqlite3

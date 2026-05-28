@@ -8,12 +8,16 @@ commit desired state and durable commands.
 
 from __future__ import annotations
 
+import logging
 import os
+import signal
 import socket
+import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
+from app.config import Config
 from app.db.pool import transaction
 from app.db.sql import load_queries
 from app.k8s import client as k8s_client
@@ -22,6 +26,7 @@ from app.k8s import deployment_manager
 
 queries = load_queries()
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+logger = logging.getLogger(__name__)
 # TODO: The MVP should run exactly one deployment worker process/pod. Before
 # scaling workers horizontally, add per-model serialization plus heartbeat/lease
 # renewal so slow Kubernetes operations cannot overlap on the same deployment.
@@ -84,12 +89,23 @@ def process_next_job(
     worker_id: str | None = None,
 ) -> JobResult:
     """Claim and process one job, returning whether work was found."""
-    job = claim_next_job(worker_id or default_worker_id())
+    active_worker_id = worker_id or default_worker_id()
+    job = claim_next_job(active_worker_id)
 
     if job is None:
         return JobResult(processed=False)
 
+    logger.info(
+        "Processing deployment job %s of type %s.",
+        job["deployment_job_id"],
+        job["job_type"],
+    )
     status = process_claimed_job(clients, job)
+    logger.info(
+        "Finished deployment job %s with status %s.",
+        job["deployment_job_id"],
+        status,
+    )
     return JobResult(
         processed=True,
         deployment_job_id=str(job["deployment_job_id"]),
@@ -333,21 +349,57 @@ def run_forever(
     clients: k8s_client.KubernetesClients | None = None,
     *,
     config: WorkerConfig | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Continuously poll for deployment jobs until the process is stopped."""
-    worker_config = config or WorkerConfig(worker_id=default_worker_id())
+    worker_config = config or WorkerConfig(
+        worker_id=default_worker_id(),
+        poll_interval_seconds=Config.WORKER_POLL_INTERVAL_SECONDS,
+    )
     k8s_clients = clients or k8s_client.create_clients()
+    should_stop = should_stop or (lambda: False)
 
-    while True:
+    logger.info(
+        "Starting deployment worker %s with %.2fs poll interval.",
+        worker_config.worker_id,
+        worker_config.poll_interval_seconds,
+    )
+
+    while not should_stop():
         result = process_next_job(k8s_clients, worker_id=worker_config.worker_id)
 
         if not result.processed:
             time.sleep(worker_config.poll_interval_seconds)
 
+    logger.info("Stopping deployment worker %s.", worker_config.worker_id)
+
+
+def setup_logging() -> None:
+    """Configure process-level logging for the worker CLI."""
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
+
+def build_shutdown_event() -> threading.Event:
+    """Return an event set by SIGINT/SIGTERM for graceful worker shutdown."""
+    stop_event = threading.Event()
+
+    def request_shutdown(signum: int, _frame: Any) -> None:
+        logger.info("Received signal %s; shutdown requested.", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+    return stop_event
+
 
 def main() -> None:
     """Console entrypoint used by `python -m app.services.deployment_worker`."""
-    run_forever()
+    setup_logging()
+    stop_event = build_shutdown_event()
+    run_forever(should_stop=stop_event.is_set)
 
 
 if __name__ == "__main__":

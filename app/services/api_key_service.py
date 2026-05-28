@@ -6,6 +6,7 @@ is returned only from `create_api_key`; all later reads expose metadata only.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.db.pool import transaction
@@ -25,6 +26,7 @@ from app.utils.validation import validate_api_key_name, validate_uuid
 # API key queries intentionally never return `key_hash` except on the dedicated
 # verification lookup. List/create/revoke responses expose metadata only.
 queries = load_queries()
+logger = logging.getLogger(__name__)
 API_KEY_HASH_UNIQUE_CONSTRAINT = "uq_api_keys_key_hash"
 API_KEY_NAME_UNIQUE_CONSTRAINT = "uq_api_keys_project_name"
 MAX_API_KEY_CREATE_ATTEMPTS = 3
@@ -79,6 +81,10 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
                     break
         except Exception as exc:
             if _is_unique_violation(exc, API_KEY_NAME_UNIQUE_CONSTRAINT):
+                logger.info(
+                    "API key creation rejected due to duplicate name project_id=%s.",
+                    canonical_project_id,
+                )
                 raise ApiError(
                     type="validation_error",
                     message="An API key with that name already exists.",
@@ -87,8 +93,17 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
 
             if _is_unique_violation(exc, API_KEY_HASH_UNIQUE_CONSTRAINT):
                 if attempt < MAX_API_KEY_CREATE_ATTEMPTS - 1:
+                    logger.warning(
+                        "API key hash collision detected project_id=%s attempt=%s.",
+                        canonical_project_id,
+                        attempt + 1,
+                    )
                     continue
 
+                logger.error(
+                    "API key generation exhausted hash collision retries project_id=%s.",
+                    canonical_project_id,
+                )
                 raise ApiError(
                     type="api_key_generation_failed",
                     message="Could not generate a unique API key. Please try again.",
@@ -98,6 +113,7 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
             raise
 
     if row is None or raw_key is None:
+        logger.error("API key generation failed project_id=%s.", canonical_project_id)
         raise ApiError(
             type="api_key_generation_failed",
             message="Could not generate a unique API key. Please try again.",
@@ -105,6 +121,11 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
         )
 
 
+    logger.info(
+        "Created API key api_key_id=%s project_id=%s.",
+        row["api_key_id"],
+        canonical_project_id,
+    )
     response = serialize_api_key(row)
 
     # This is the only API response that includes the raw credential. All later
@@ -130,6 +151,11 @@ def list_api_keys(user_id: Any, project_id: Any) -> dict[str, list[dict[str, Any
             )
             rows = cur.fetchall()
 
+    logger.debug(
+        "Listed API keys project_id=%s count=%s.",
+        canonical_project_id,
+        len(rows),
+    )
     return {"api_keys": [serialize_api_key(row) for row in rows]}
 
 
@@ -159,8 +185,18 @@ def revoke_api_key(user_id: Any, project_id: Any, api_key_id: Any) -> dict[str, 
             row = cur.fetchone()
 
     if row is None:
+        logger.info(
+            "API key revoke missed api_key_id=%s project_id=%s.",
+            canonical_api_key_id,
+            canonical_project_id,
+        )
         raise api_key_not_found_error()
 
+    logger.info(
+        "Revoked API key api_key_id=%s project_id=%s.",
+        canonical_api_key_id,
+        canonical_project_id,
+    )
     return {"revoked": True}
 
 
@@ -193,11 +229,17 @@ def authenticate_project_api_key(raw_key: str) -> dict[str, str]:
                         queries.get("update_api_key_last_used"),
                         {"api_key_id": row["api_key_id"]},
                     )
+                    logger.debug(
+                        "Authenticated project API key api_key_id=%s project_id=%s.",
+                        row["api_key_id"],
+                        row["project_id"],
+                    )
                     return {
                         "apiKeyID": str(row["api_key_id"]),
                         "projectID": str(row["project_id"]),
                     }
 
+    logger.info("Project API key authentication failed for prefix=%s.", key_prefix)
     raise api_keys.invalid_api_key_error()
 
 

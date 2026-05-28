@@ -7,12 +7,16 @@ predictable and gives tests a small surface to verify.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.config import Config
 from app.k8s import client as k8s_client
 from app.k8s.manifests import build_model_manifests
 from app.k8s.names import build_model_resource_names
+
+
+logger = logging.getLogger(__name__)
 
 
 def apply_model_deployment(
@@ -30,6 +34,12 @@ def apply_model_deployment(
         pvc_size=pvc_size,
         hugging_face_token=hugging_face_token,
     )
+    logger.info(
+        "Applying Kubernetes model deployment model_deployment_id=%s namespace=%s deployment=%s.",
+        deployment.get("model_deployment_id"),
+        deployment["k8s_namespace"],
+        deployment["k8s_deployment_name"],
+    )
 
     # Namespace and PVC must exist before pods can be scheduled with the cache
     # volume mounted.
@@ -46,6 +56,10 @@ def apply_model_deployment(
 
     if manifests["hpa"] is not None:
         k8s_client.apply_hpa(clients, manifests["hpa"])
+    logger.info(
+        "Applied Kubernetes model deployment model_deployment_id=%s.",
+        deployment.get("model_deployment_id"),
+    )
 
 
 def delete_model_deployment(
@@ -63,6 +77,13 @@ def delete_model_deployment(
     """
     names = build_model_resource_names(deployment["k8s_namespace"], deployment["name"])
     namespace = names["k8s_namespace"]
+    logger.info(
+        "Deleting Kubernetes model resources model_deployment_id=%s namespace=%s deployment=%s delete_cache=%s.",
+        deployment.get("model_deployment_id"),
+        namespace,
+        deployment["k8s_deployment_name"],
+        delete_cache,
+    )
 
     # Delete traffic/scaling resources before deleting pods. Each delete helper
     # treats 404 as success, which keeps retries idempotent.
@@ -79,6 +100,10 @@ def delete_model_deployment(
 
     if delete_cache:
         k8s_client.delete_pvc(clients, namespace, names["k8s_pvc_name"])
+    logger.info(
+        "Deleted Kubernetes model resources model_deployment_id=%s.",
+        deployment.get("model_deployment_id"),
+    )
 
 
 def scale_model_deployment(
@@ -94,6 +119,13 @@ def scale_model_deployment(
             "replicas": replicas,
         }
     }
+    logger.info(
+        "Scaling Kubernetes model deployment model_deployment_id=%s namespace=%s deployment=%s replicas=%s.",
+        deployment.get("model_deployment_id"),
+        deployment["k8s_namespace"],
+        deployment["k8s_deployment_name"],
+        replicas,
+    )
     return clients.apps.patch_namespaced_deployment_scale(
         deployment["k8s_deployment_name"],
         deployment["k8s_namespace"],

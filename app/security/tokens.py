@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import timedelta
 from functools import wraps
+import logging
 from typing import Any, TypeVar
 
 import jwt
@@ -22,6 +23,7 @@ TOKEN_TYPE = "user_access"
 ALGORITHM = "HS256"
 DEFAULT_ACCESS_TOKEN_TTL = timedelta(hours=8)
 F = TypeVar("F", bound=Callable[..., Any])
+logger = logging.getLogger(__name__)
 
 
 def create_access_token(
@@ -39,6 +41,7 @@ def create_access_token(
         "iat": now,
         "exp": now + expires_delta,
     }
+    logger.debug("Created access token user_id=%s.", user_id)
     return jwt.encode(payload, current_app.config["SECRET_KEY"], algorithm=ALGORITHM)
 
 
@@ -52,10 +55,12 @@ def decode_access_token(token: str) -> dict[str, Any]:
             algorithms=[ALGORITHM],
         )
     except jwt.PyJWTError as exc:
+        logger.info("Rejected invalid access token error=%s.", exc.__class__.__name__)
         raise unauthorized_error() from exc
 
     # Reject validly-signed tokens that are not MiniTen user access tokens.
     if payload.get("type") != TOKEN_TYPE or not payload.get("sub"):
+        logger.info("Rejected access token with invalid type or subject.")
         raise unauthorized_error()
 
     return payload
@@ -69,6 +74,7 @@ def get_bearer_token() -> str:
     scheme, _, token = auth_header.partition(" ")
 
     if scheme.lower() != "bearer" or not token:
+        logger.info("Rejected request with missing bearer token.")
         raise unauthorized_error()
 
     return token.strip()
@@ -81,6 +87,7 @@ def current_user_id() -> str:
     user_id = getattr(g, "current_user_id", None)
 
     if not user_id:
+        logger.info("Rejected authenticated request without current user id.")
         raise unauthorized_error()
 
     return str(user_id)
@@ -96,6 +103,7 @@ def require_user_auth(view: F) -> F:
         token = get_bearer_token()
         payload = decode_access_token(token)
         g.current_user_id = payload["sub"]
+        logger.debug("Authenticated user request user_id=%s.", g.current_user_id)
         return view(*args, **kwargs)
 
     return wrapped  # type: ignore[return-value]

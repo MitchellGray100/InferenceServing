@@ -7,14 +7,16 @@ WORKDIR /app
 # Docker can reuse this layer when application code changes but dependencies do
 # not.
 RUN pip install --no-cache-dir poetry
-COPY pyproject.toml .
+# Copy the lock file with pyproject so dependency installs are reproducible.
+COPY pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false \
     && poetry install --only main --no-interaction --no-ansi
 
 COPY . .
 
-ENV FLASK_APP=app
+ENV PYTHONUNBUFFERED=1
+ENV API_PORT=8000
 
-# The development image runs Flask directly. Production deployment can replace
-# this with a WSGI server command without changing application code.
-CMD ["flask", "run", "--host", "0.0.0.0"]
+# Run the API with Gunicorn by default. The worker service overrides this
+# command in docker-compose.yml.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "wsgi:app"]

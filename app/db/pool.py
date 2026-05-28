@@ -6,6 +6,7 @@ requests, background workers, and reconciliation jobs.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -14,6 +15,7 @@ from app.config import Config
 
 
 _pool: Any | None = None
+logger = logging.getLogger(__name__)
 
 
 def create_pool(database_url: str | None = None, **kwargs: Any) -> Any:
@@ -40,11 +42,27 @@ def create_pool(database_url: str | None = None, **kwargs: Any) -> Any:
     connection_kwargs = kwargs.pop("kwargs", {})
     connection_kwargs.setdefault("row_factory", dict_row)
 
+    # Validate connections before handing them to request/service code. This
+    # matters in local Docker workflows where Postgres may restart while the
+    # Flask process is still running; without a check the pool can hand out a
+    # stale socket and the next request fails with OperationalError.
+    kwargs.setdefault("check", ConnectionPool.check_connection)
+
+    min_size = kwargs.pop("min_size", 1)
+    max_size = kwargs.pop("max_size", 10)
+    open_pool = kwargs.pop("open", False)
+    logger.info(
+        "Creating Postgres connection pool min_size=%s max_size=%s open=%s.",
+        min_size,
+        max_size,
+        open_pool,
+    )
+
     return ConnectionPool(
         conninfo=conninfo,
-        min_size=kwargs.pop("min_size", 1),
-        max_size=kwargs.pop("max_size", 10),
-        open=kwargs.pop("open", False),
+        min_size=min_size,
+        max_size=max_size,
+        open=open_pool,
         kwargs=connection_kwargs,
         **kwargs,
     )
@@ -61,6 +79,7 @@ def init_pool(database_url: str | None = None, **kwargs: Any) -> Any:
 
     _pool = create_pool(database_url=database_url, **kwargs)
     _pool.open()
+    logger.info("Postgres connection pool opened.")
     return _pool
 
 
@@ -80,6 +99,7 @@ def close_pool() -> None:
 
     _pool.close()
     _pool = None
+    logger.info("Postgres connection pool closed.")
 
 
 @contextmanager

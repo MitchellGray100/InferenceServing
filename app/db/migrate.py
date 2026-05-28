@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -127,6 +129,7 @@ def migrate(database_url: str, directory: Path | None = None) -> list[str]:
     directory = directory or migrations_dir()
     migrations = load_migrations(directory)
     applied_now: list[str] = []
+    logger.info("Starting database migration run directory=%s.", directory)
 
     with psycopg.connect(database_url) as conn:
         applied = get_applied_migrations(conn)
@@ -148,7 +151,9 @@ def migrate(database_url: str, directory: Path | None = None) -> list[str]:
 
             apply_migration(conn, migration)
             applied_now.append(migration.version)
+            logger.info("Applied database migration version=%s.", migration.version)
 
+    logger.info("Finished database migration run applied_count=%s.", len(applied_now))
     return applied_now
 
 

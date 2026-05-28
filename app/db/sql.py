@@ -7,12 +7,14 @@ large SQL strings through Python code.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 
 QUERY_MARKER_RE = re.compile(r"^--\s*name:\s*([a-zA-Z0-9_]+)\s*$")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,7 @@ def load_queries(directory: Path | None = None) -> QueryStore:
                 )
             queries[name] = query
 
+    logger.debug("Loaded %s SQL queries from %s.", len(queries), directory)
     return QueryStore(queries)
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -20,6 +21,7 @@ from app.utils.validation import validate_string, validate_uuid
 
 
 queries = load_queries()
+logger = logging.getLogger(__name__)
 IDEMPOTENCY_KEY_MAX_LENGTH = 255
 IDEMPOTENCY_TTL_HOURS = 24
 
@@ -40,6 +42,11 @@ def run_idempotent_control_plane_request(
     saved for exact retries.
     """
     if not idempotency_key:
+        logger.info(
+            "Rejected control-plane request without idempotency key method=%s path=%s.",
+            method,
+            path,
+        )
         raise missing_idempotency_key_error()
 
     canonical_project_id = validate_uuid(project_id, "projectID")
@@ -59,6 +66,11 @@ def run_idempotent_control_plane_request(
     )
 
     if record["request_hash"] != request_hash:
+        logger.info(
+            "Rejected idempotency key reuse with different request project_id=%s path=%s.",
+            canonical_project_id,
+            path,
+        )
         raise ApiError(
             type="idempotency_key_conflict",
             message="This Idempotency-Key was already used with a different request.",
@@ -66,6 +78,12 @@ def run_idempotent_control_plane_request(
         )
 
     if record["response_status"] is not None and record["response_body"] is not None:
+        logger.info(
+            "Replayed idempotent response project_id=%s path=%s status=%s.",
+            canonical_project_id,
+            path,
+            record["response_status"],
+        )
         return record["response_body"], record["response_status"]
 
     response_body, response_status = action()
@@ -73,6 +91,12 @@ def run_idempotent_control_plane_request(
         record["idempotency_key_id"],
         response_status=response_status,
         response_body=response_body,
+    )
+    logger.info(
+        "Stored idempotent response project_id=%s path=%s status=%s.",
+        canonical_project_id,
+        path,
+        response_status,
     )
     return response_body, response_status
 
@@ -118,6 +142,11 @@ def get_or_create_idempotency_record(
             record = cur.fetchone()
 
             if record is not None:
+                logger.debug(
+                    "Found idempotency record project_id=%s user_id=%s.",
+                    project_id,
+                    user_id,
+                )
                 return record
 
             try:
@@ -135,6 +164,11 @@ def get_or_create_idempotency_record(
                 )
             except Exception as exc:
                 if _is_unique_violation(exc):
+                    logger.info(
+                        "Idempotency key already in progress project_id=%s user_id=%s.",
+                        project_id,
+                        user_id,
+                    )
                     raise ApiError(
                         type="idempotency_key_in_progress",
                         message=(
@@ -145,7 +179,13 @@ def get_or_create_idempotency_record(
                     ) from exc
                 raise
 
-            return cur.fetchone()
+            record = cur.fetchone()
+            logger.debug(
+                "Created idempotency record project_id=%s user_id=%s.",
+                project_id,
+                user_id,
+            )
+            return record
 
 
 def save_idempotency_response(

@@ -7,6 +7,7 @@ forwards the request to that deployment's internal vLLM Service.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -21,6 +22,7 @@ from app.utils.validation import require_field, require_json_object, validate_st
 
 
 queries = load_queries()
+logger = logging.getLogger(__name__)
 VLLM_PORT = 8000
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 
@@ -36,6 +38,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
     # Streaming requires a different HTTP response shape and connection
     # handling, so the first MVP pass rejects it explicitly.
     if data.get("stream") is True:
+        logger.info("Rejected streaming inference request model=%s.", model_name)
         raise ApiError(
             type="streaming_not_supported",
             message="Streaming responses are not supported yet.",
@@ -56,6 +59,12 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
     error_type: str | None = None
 
     try:
+        logger.info(
+            "Proxying inference request project_id=%s model_deployment_id=%s model=%s.",
+            identity["projectID"],
+            deployment["model_deployment_id"],
+            model_name,
+        )
         upstream_response = requests.post(
             url,
             json=data,
@@ -63,12 +72,23 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
         )
         status_code = upstream_response.status_code
         response_body = parse_upstream_json(upstream_response)
+        logger.info(
+            "Inference upstream completed project_id=%s model=%s status=%s.",
+            identity["projectID"],
+            model_name,
+            status_code,
+        )
         return response_body, status_code
     except requests.Timeout as exc:
         # Surface timeouts as gateway timeouts because MiniTen is acting as a
         # proxy to an upstream model server.
         status_code = 504
         error_type = "upstream_timeout"
+        logger.warning(
+            "Inference upstream timeout project_id=%s model=%s.",
+            identity["projectID"],
+            model_name,
+        )
         raise ApiError(
             type="upstream_timeout",
             message="Timed out waiting for model response.",
@@ -76,6 +96,12 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
         ) from exc
     except requests.RequestException as exc:
         error_type = "upstream_error"
+        logger.warning(
+            "Inference upstream request failed project_id=%s model=%s error=%s.",
+            identity["projectID"],
+            model_name,
+            exc.__class__.__name__,
+        )
         raise ApiError(
             type="upstream_error",
             message="Model service request failed.",
@@ -83,6 +109,11 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
         ) from exc
     except ValueError as exc:
         error_type = "upstream_invalid_response"
+        logger.warning(
+            "Inference upstream returned invalid JSON project_id=%s model=%s.",
+            identity["projectID"],
+            model_name,
+        )
         raise ApiError(
             type="upstream_invalid_response",
             message="Model service returned a non-JSON response.",
@@ -103,6 +134,13 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
             method="POST",
             streamed=False,
         )
+        logger.debug(
+            "Recorded inference request project_id=%s model_deployment_id=%s status=%s latency_ms=%s.",
+            identity["projectID"],
+            deployment["model_deployment_id"],
+            status_code,
+            latency_ms,
+        )
 
 
 def list_models(raw_api_key: str) -> dict[str, Any]:
@@ -120,6 +158,11 @@ def list_models(raw_api_key: str) -> dict[str, Any]:
             )
             rows = cur.fetchall()
 
+    logger.debug(
+        "Listed inference models project_id=%s count=%s.",
+        identity["projectID"],
+        len(rows),
+    )
     return {
         "object": "list",
         "data": [serialize_openai_model(row) for row in rows],
@@ -142,6 +185,7 @@ def get_deployment_for_inference(project_id: str, model_name: str) -> dict[str, 
             row = cur.fetchone()
 
     if row is None:
+        logger.info("Inference model lookup missed project_id=%s model=%s.", project_id, model_name)
         raise ApiError(
             type="model_not_found",
             message="Model not found.",
@@ -154,6 +198,11 @@ def get_deployment_for_inference(project_id: str, model_name: str) -> dict[str, 
 def ensure_deployment_running(deployment: dict[str, Any]) -> None:
     """Reject inference to deployments that are not ready for traffic."""
     if deployment["status"] != "running":
+        logger.info(
+            "Rejected inference to non-running model_deployment_id=%s status=%s.",
+            deployment["model_deployment_id"],
+            deployment["status"],
+        )
         raise ApiError(
             type="model_not_ready",
             message="Model deployment is not running.",

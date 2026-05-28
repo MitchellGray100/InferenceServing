@@ -7,10 +7,14 @@ All JSON APIs should use the documented error shape:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from flask import jsonify
 from werkzeug import Response
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,4 +79,9 @@ def register_error_handlers(app: Any) -> None:
 
     @app.errorhandler(ApiError)
     def handle_api_error(error: ApiError) -> tuple[Response, int]:
+        logger.info(
+            "API error returned type=%s status=%s.",
+            error.type,
+            error.status_code,
+        )
         return api_error_response(error)

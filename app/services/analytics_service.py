@@ -7,6 +7,7 @@ responses are intentionally not persisted or returned by the MVP.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,6 +31,7 @@ from app.utils.validation import (
 DEFAULT_REQUEST_LIMIT = 100
 MAX_REQUEST_LIMIT = 500
 queries = load_queries()
+logger = logging.getLogger(__name__)
 
 
 def get_model_metrics(
@@ -69,6 +71,11 @@ def get_model_metrics(
             )
             metrics = cur.fetchone()
 
+    logger.debug(
+        "Fetched model metrics project_id=%s model=%s.",
+        canonical_project_id,
+        canonical_model_name,
+    )
     return {
         "model": serialize_model_summary(deployment),
         "metrics": serialize_model_metrics(metrics),
@@ -128,6 +135,12 @@ def list_model_requests(
             )
             rows = cur.fetchall()
 
+    logger.debug(
+        "Listed model request history project_id=%s model=%s count=%s.",
+        canonical_project_id,
+        canonical_model_name,
+        len(rows),
+    )
     return {"requests": [serialize_inference_request(row) for row in rows]}
 
 
@@ -159,6 +172,12 @@ def list_model_events(
             )
             rows = cur.fetchall()
 
+    logger.debug(
+        "Listed model events project_id=%s model=%s count=%s.",
+        canonical_project_id,
+        canonical_model_name,
+        len(rows),
+    )
     return {"events": [serialize_model_event(row) for row in rows]}
 
 

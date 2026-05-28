@@ -704,23 +704,55 @@ Hugging Face Hub       → public Hugging Face Hub
 Example local workflow:
 
 ```bash
-make install
-docker compose up -d postgres
-kind create cluster --name miniten
-poetry run python -m app.db.migrate
-poetry run flask --app app run --debug
-poetry run python -m app.services.deployment_worker
+make setup-env
+make run-api
+make run-worker
 ```
 
 Common development commands:
 
 ```bash
 make install
+make setup-env
+make clean-env
+make migrate
+make run-api
+make run-worker
+make test-local-apis
 make lint
 make tests
 make compile
 make clean
 ```
+
+`make setup-env` installs Python dependencies, starts local Postgres through
+Docker Compose, waits for it to accept connections, and applies migrations.
+`make clean-env` stops Compose services and removes the local Postgres volume.
+`make test-local-apis` runs HTTP smoke tests against a running local API, so
+start `make run-api` in another terminal first. If `setup-env` restarts
+Postgres while the API is already running, restart `make run-api` so the local
+Flask process opens fresh database connections.
+
+The Makefile enforces the expected order for local development:
+
+```bash
+make setup-env
+make run-api
+```
+
+`make setup-env` fails if the local API port is already running, because setup
+may restart Postgres. `make run-api` fails until `setup-env` has completed and
+written the local setup marker. `make clean-env` removes that marker.
+
+`make run-api` starts Flask's development server through `app/main.py`, which
+works on Windows/Git Bash. Gunicorn depends on Unix-only modules such as
+`fcntl`, so `make run-api-gunicorn` is for Linux/WSL-style environments only.
+The Docker image uses the Gunicorn path by default, while the Compose `worker`
+service overrides the command to run `python -m app.services.deployment_worker`.
+
+Logging is controlled with `LOG_LEVEL`, defaulting to `INFO`. Use `DEBUG` when
+you need lower-level SQL/Kubernetes/auth diagnostics. Logs intentionally avoid
+raw API keys, passwords, prompts, model responses, and Hugging Face tokens.
 
 ---
 

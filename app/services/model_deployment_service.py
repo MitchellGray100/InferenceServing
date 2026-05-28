@@ -7,6 +7,7 @@ enqueue `deployment_jobs`; Kubernetes work is intentionally left for the worker.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from flask import current_app
@@ -34,6 +35,7 @@ from app.utils.validation import (
 # SQL in `app/db/queries` makes transaction boundaries obvious in Python while
 # still leaving the actual table operations easy to review.
 queries = load_queries()
+logger = logging.getLogger(__name__)
 
 # These values are the exact enum strings allowed by the `deployment_jobs`
 # schema. Route/service code uses the short action names for readability, then
@@ -102,6 +104,11 @@ def create_model_deployment(
                 )
             except Exception as exc:
                 if _is_unique_violation(exc):
+                    logger.info(
+                        "Model deployment creation rejected duplicate name project_id=%s name=%s.",
+                        canonical_project_id,
+                        spec["name"],
+                    )
                     raise ApiError(
                         type="validation_error",
                         message="A model deployment with that name already exists.",
@@ -118,6 +125,12 @@ def create_model_deployment(
                 build_job_payload("deploy_model", deployment),
             )
 
+    logger.info(
+        "Created model deployment model_deployment_id=%s project_id=%s job_id=%s.",
+        deployment["model_deployment_id"],
+        canonical_project_id,
+        job["deployment_job_id"],
+    )
     return {
         "modelDeployment": serialize_model_deployment(deployment),
         "deploymentJob": serialize_deployment_job(job),
@@ -139,6 +152,11 @@ def list_model_deployments(user_id: Any, project_id: Any) -> dict[str, list[dict
             )
             rows = cur.fetchall()
 
+    logger.debug(
+        "Listed model deployments project_id=%s count=%s.",
+        canonical_project_id,
+        len(rows),
+    )
     return {"modelDeployments": [serialize_model_deployment(row) for row in rows]}
 
 
@@ -153,6 +171,11 @@ def get_model_deployment(
         project_id,
         model_deployment_id,
         VIEW_ROLES,
+    )
+    logger.debug(
+        "Fetched model deployment model_deployment_id=%s project_id=%s.",
+        model_deployment_id,
+        project_id,
     )
     return serialize_model_deployment(deployment)
 
@@ -232,6 +255,11 @@ def scale_model_deployment(
             )
 
             if deployment is None:
+                logger.info(
+                    "Scale model deployment missed model_deployment_id=%s project_id=%s.",
+                    canonical_model_deployment_id,
+                    canonical_project_id,
+                )
                 raise model_deployment_not_found_error()
 
             cur.execute(
@@ -254,6 +282,13 @@ def scale_model_deployment(
                 ),
             )
 
+    logger.info(
+        "Enqueued scale model_deployment_id=%s project_id=%s replicas=%s job_id=%s.",
+        canonical_model_deployment_id,
+        canonical_project_id,
+        desired_replicas,
+        job["deployment_job_id"],
+    )
     return {
         "modelDeployment": serialize_model_deployment(deployment),
         "deploymentJob": serialize_deployment_job(job),
@@ -311,6 +346,12 @@ def lifecycle_command(
             )
 
             if deployment is None:
+                logger.info(
+                    "Lifecycle command missed model_deployment_id=%s project_id=%s job_type=%s.",
+                    canonical_model_deployment_id,
+                    canonical_project_id,
+                    job_type,
+                )
                 raise model_deployment_not_found_error()
 
             cur.execute(
@@ -329,6 +370,14 @@ def lifecycle_command(
                 build_job_payload(job_type, deployment, payload_extra),
             )
 
+    logger.info(
+        "Enqueued model lifecycle command model_deployment_id=%s project_id=%s job_type=%s status=%s job_id=%s.",
+        canonical_model_deployment_id,
+        canonical_project_id,
+        job_type,
+        requested_status,
+        job["deployment_job_id"],
+    )
     return {
         "modelDeployment": serialize_model_deployment(deployment),
         "deploymentJob": serialize_deployment_job(job),
@@ -498,6 +547,11 @@ def get_model_deployment_for_user(
             )
 
     if deployment is None:
+        logger.info(
+            "Model deployment lookup missed model_deployment_id=%s project_id=%s.",
+            canonical_model_deployment_id,
+            canonical_project_id,
+        )
         raise model_deployment_not_found_error()
 
     return deployment
@@ -543,7 +597,15 @@ def enqueue_deployment_job_with_cursor(
             "payload": Jsonb(payload),
         },
     )
-    return cur.fetchone()
+    job = cur.fetchone()
+    logger.debug(
+        "Inserted deployment job job_id=%s model_deployment_id=%s job_type=%s generation=%s.",
+        job["deployment_job_id"],
+        model_deployment_id,
+        job_type,
+        payload["desired_generation"],
+    )
+    return job
 
 
 def build_job_payload(

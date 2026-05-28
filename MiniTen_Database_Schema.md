@@ -861,7 +861,7 @@ WHERE expires_at < NOW();
 - Do not use idempotency for normal model inference requests in the MVP.
 - Store the original response so retries can receive the same result.
 - Return `409 Conflict` if the same key is reused with a different request.
-- This table works well with a future `deployment_jobs` table to prevent duplicate async jobs.
+- This table works with the real MVP `deployment_jobs` table to prevent duplicate async jobs.
 
 
 ---
@@ -870,9 +870,11 @@ WHERE expires_at < NOW();
 
 ## Purpose
 
-Stores asynchronous jobs for model lifecycle operations.
+Stores asynchronous jobs and command history for model lifecycle operations.
 
 This table lets MiniTen return quickly from slow control-plane requests while a background Deployment Worker or Reconciler performs the actual Kubernetes work.
+
+It is also the durable record of deployment commands that were requested, attempted, retried, completed, or failed.
 
 This is useful because model operations can take a long time:
 
@@ -887,7 +889,7 @@ sync status
 
 This table answers:
 
-> What model lifecycle work needs to be processed, retried, or inspected?
+> What model lifecycle work needs to be processed, retried, inspected, or reviewed later?
 
 The `deployment_jobs` table is for control-plane operations only. Normal inference requests, such as `/v1/chat/completions`, should not use this queue in the MVP.
 
@@ -1409,26 +1411,6 @@ CREATE TABLE project_members (
   UNIQUE(project_id, user_id)
 );
 
-CREATE TABLE project_invites (
-  project_invite_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-
-  email TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'member'
-    CHECK (role IN ('owner', 'member', 'viewer')),
-
-  invited_by_user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-
-  token_hash TEXT NOT NULL UNIQUE,
-
-  accepted_at TIMESTAMP,
-  expires_at TIMESTAMP NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-  UNIQUE(project_id, email)
-);
-
 CREATE TABLE model_deployments (
   model_deployment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
@@ -1567,6 +1549,45 @@ CREATE TABLE idempotency_keys (
   expires_at TIMESTAMP NOT NULL,
 
   UNIQUE(project_id, user_id, idempotency_key)
+);
+
+CREATE TABLE deployment_jobs (
+  deployment_job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+
+  model_deployment_id UUID
+    REFERENCES model_deployments(model_deployment_id)
+    ON DELETE CASCADE,
+
+  job_type TEXT NOT NULL CHECK (job_type IN (
+    'deploy_model',
+    'start_model',
+    'stop_model',
+    'scale_model',
+    'delete_model',
+    'sync_status'
+  )),
+
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+    'queued',
+    'running',
+    'succeeded',
+    'failed',
+    'retrying'
+  )),
+
+  payload JSONB NOT NULL DEFAULT '{}',
+
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
+
+  locked_by TEXT,
+  locked_at TIMESTAMP,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 

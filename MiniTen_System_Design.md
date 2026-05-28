@@ -340,7 +340,7 @@ The vLLM worker reads and writes model files through the mounted filesystem path
 
 Model lifecycle operations can be slow. Deploying a model requires creating Kubernetes resources, starting pods, downloading model weights, and waiting for readiness.
 
-MiniTen uses a Postgres-backed `deployment_jobs` table so the API can return quickly.
+MiniTen uses a Postgres-backed `deployment_jobs` table so the API can return quickly and retain a durable history of deployment commands.
 
 The Deployment Worker:
 
@@ -864,7 +864,7 @@ Not used for:
 
 ## 12. Deployment Job Queue Flow
 
-MiniTen uses Postgres as a durable queue for lifecycle operations.
+MiniTen uses Postgres as a durable queue and command history for lifecycle operations.
 
 ## 12.1 Job Creation
 

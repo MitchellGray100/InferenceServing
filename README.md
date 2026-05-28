@@ -572,7 +572,7 @@ Kubernetes remains the source of truth for live pod and replica state.
 
 ## Deployment Jobs
 
-`deployment_jobs` stores asynchronous model lifecycle work.
+`deployment_jobs` stores asynchronous model lifecycle work and the durable history of deployment commands that were requested, attempted, retried, completed, or failed.
 
 Job types:
 

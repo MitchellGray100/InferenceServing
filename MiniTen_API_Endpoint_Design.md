@@ -687,7 +687,8 @@ Delete project Kubernetes namespace
 
 The Project Members API manages project membership.
 
-The MVP does not support invites. Users must already have accounts before they can be added to a project.
+Users must already have accounts before they can be added to a project.
+
 
 ## 4.1 List project members
 
@@ -1203,11 +1204,9 @@ owner, member
 2. Validate deployment name.
 3. Ensure name is unique within project.
 4. Insert model_deployments row with status = deploying.
-5. Generate Kubernetes Deployment.
-6. Generate Kubernetes Service.
-7. If autoscaling enabled, generate Kubernetes HPA.
-8. Insert model_events rows.
-9. Return deployment object.
+5. Insert deployment_jobs row with job_type = deploy_model.
+6. Insert model_events row: deploy_requested.
+7. Return queued/deploying deployment object.
 ```
 
 ### Response
@@ -1239,15 +1238,15 @@ owner, member
 projects
 project_members
 model_deployments
+deployment_jobs
 model_events
 ```
 
 ### Kubernetes actions
 
 ```text
-Create Deployment
-Create Service
-Create HPA, if autoscaling enabled
+None directly in the request handler.
+The Deployment Worker creates Namespace, PVC, Deployment, Service, HPA, and Secret resources from the deployment_jobs row.
 ```
 
 ---
@@ -1437,10 +1436,10 @@ owner, member
 1. Verify user is project owner or member.
 2. Find model by projectID + modelName.
 3. Validate requested changes.
-4. Patch or recreate Kubernetes resources as needed.
-5. Update model_deployments row.
-6. Insert model_events row: model_updated.
-7. Return updated model.
+4. Update desired configuration in model_deployments.
+5. Insert deployment_jobs row with job_type = scale_model or sync_status, depending on the change.
+6. Insert model_events row such as model_scaled when the worker applies the change.
+7. Return queued/updated model.
 ```
 
 ### Important Rules
@@ -1498,16 +1497,15 @@ If autoscaling is enabled, direct `replicas` updates should be rejected or ignor
 
 ```text
 model_deployments
+deployment_jobs
 model_events
 ```
 
 ### Kubernetes actions
 
 ```text
-Patch Deployment
-Patch or create HPA
-Delete HPA if autoscaling disabled
-Restart pods if required
+None directly in the request handler.
+The Deployment Worker patches Deployment and HPA resources, and restarts pods if required.
 ```
 
 ---
@@ -1554,11 +1552,11 @@ Optional:
 ```text
 1. Verify user is project owner or member.
 2. Find model by projectID + modelName.
-3. Patch Kubernetes Deployment replicas to requested value or 1.
-4. If autoscaling was previously enabled, restore HPA settings.
+3. Insert deployment_jobs row with job_type = start_model.
+4. Store requested replicas or autoscaling restore intent in the job payload.
 5. Update status to loading.
 6. Insert model_events row: model_started.
-7. Return updated model.
+7. Return queued/loading model.
 ```
 
 ### Response
@@ -1571,10 +1569,19 @@ Optional:
 }
 ```
 
+### Tables used
+
+```text
+model_deployments
+deployment_jobs
+model_events
+```
+
 ### Kubernetes actions
 
 ```text
-Scale Deployment up
+None directly in the request handler.
+The Deployment Worker scales the Deployment up and restores HPA settings if needed.
 ```
 
 ---
@@ -1612,11 +1619,11 @@ owner, member
 ```text
 1. Verify user is project owner or member.
 2. Find model by projectID + modelName.
-3. If autoscaling is enabled, disable/suspend HPA or set min_replicas = 0.
-4. Patch Kubernetes Deployment replicas to 0.
-5. Update status = stopped.
+3. Insert deployment_jobs row with job_type = stop_model.
+4. Store HPA suspension or min_replicas = 0 intent in the job payload when autoscaling is enabled.
+5. Update status = stopped or stopping-equivalent queued state.
 6. Insert model_events row: model_stopped.
-7. Return updated model.
+7. Return queued/stopped model.
 ```
 
 ### Response
@@ -1629,6 +1636,14 @@ owner, member
 }
 ```
 
+### Tables used
+
+```text
+model_deployments
+deployment_jobs
+model_events
+```
+
 ### Important Rule
 
 If autoscaling is enabled, stop must handle the HPA first. Otherwise HPA may scale the deployment back up.
@@ -1636,8 +1651,8 @@ If autoscaling is enabled, stop must handle the HPA first. Otherwise HPA may sca
 ### Kubernetes actions
 
 ```text
-Patch HPA or disable HPA
-Scale Deployment to zero
+None directly in the request handler.
+The Deployment Worker handles HPA first, then scales the Deployment to zero.
 ```
 
 ---
@@ -1675,12 +1690,9 @@ owner, member
 1. Verify user is project owner or member.
 2. Find model by projectID + modelName.
 3. Set status = deleting.
-4. Delete Kubernetes HPA, if present.
-5. Delete Kubernetes Service.
-6. Delete Kubernetes Deployment.
-7. Set deleted_at = now() and status = deleted.
-8. Insert model_events row: model_deleted.
-9. Return success.
+4. Insert deployment_jobs row with job_type = delete_model.
+5. Insert model_events row: model_deleted when the worker finishes deletion.
+6. Return queued/deleting response.
 ```
 
 ### Response
@@ -1695,15 +1707,15 @@ owner, member
 
 ```text
 model_deployments
+deployment_jobs
 model_events
 ```
 
 ### Kubernetes actions
 
 ```text
-Delete HPA
-Delete Service
-Delete Deployment
+None directly in the request handler.
+The Deployment Worker deletes HPA, Service, Deployment, Secret, and other deployment-owned resources as needed.
 ```
 
 ---
@@ -2330,7 +2342,7 @@ kubernetes_error
 
 ```http
 POST   /v1/users
-GET    /v1/users/{userID}
+GET    /v1/users/me
 DELETE /v1/users/{userID}
 ```
 

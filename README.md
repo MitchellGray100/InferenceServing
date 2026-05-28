@@ -690,11 +690,22 @@ Hugging Face Hub       → public Hugging Face Hub
 Example local workflow:
 
 ```bash
+make install
 docker compose up -d postgres
 kind create cluster --name miniten
-python -m app.db.migrate
-flask --app app run --debug
-python -m app.services.deployment_worker
+poetry run python -m app.db.migrate
+poetry run flask --app app run --debug
+poetry run python -m app.services.deployment_worker
+```
+
+Common development commands:
+
+```bash
+make install
+make lint
+make tests
+make compile
+make clean
 ```
 
 ---
@@ -708,7 +719,7 @@ README.md
 .env.example
 docker-compose.yml
 Dockerfile
-requirements.txt
+pyproject.toml
 
 app/
   __init__.py

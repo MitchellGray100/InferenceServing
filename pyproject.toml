@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "miniten-inference-serving"
+version = "0.1.0"
+description = "MiniTen inference serving control plane and API."
+authors = []
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+Flask = ">=3.0,<4.0"
+psycopg = { version = ">=3.2,<4.0", extras = ["binary", "pool"] }
+kubernetes = ">=29.0,<30.0"
+requests = ">=2.32,<3.0"
+python-dotenv = ">=1.0,<2.0"
+argon2-cffi = ">=23.1,<24.0"
+PyJWT = ">=2.8,<3.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0,<9.0"
+ruff = ">=0.6,<1.0"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

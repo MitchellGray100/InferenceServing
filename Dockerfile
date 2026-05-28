@@ -3,10 +3,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install Python dependencies before copying the full source tree so Docker can
-# reuse this layer when application code changes but requirements do not.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Poetry and project dependencies before copying the full source tree so
+# Docker can reuse this layer when application code changes but dependencies do
+# not.
+RUN pip install --no-cache-dir poetry
+COPY pyproject.toml .
+RUN poetry config virtualenvs.create false \
+    && poetry install --only main --no-interaction --no-ansi
 
 COPY . .
 

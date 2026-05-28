@@ -216,33 +216,30 @@ users
 ## 1.2 Get user
 
 ```http
-GET /v1/users/{userID}
+GET /v1/users/me
 ```
 
-### Purpose
+Returns the currently authenticated user's account record.
 
-Returns a user account record.
-
-Used by:
-
-```text
-Dashboard account page
-Internal user profile lookup
-```
+The user is resolved from the auth token. The client does not need to provide a user ID.
 
 ### Auth
 
 User auth token required.
 
-### Permissions
-
-For MVP:
-
-```text
-Users can only fetch their own user record.
+```http
+Authorization: Bearer <access_token>
 ```
 
-Admin-level user lookup is out of scope.
+### Behavior
+
+```text
+1. Read Authorization header.
+2. Validate access token.
+3. Extract user_id from token claims.
+4. Fetch user by user_id.
+5. Return user without hashed_password.
+```
 
 ### Response
 
@@ -255,11 +252,23 @@ Admin-level user lookup is out of scope.
 }
 ```
 
-### Tables used
+### Errors
+
+```json
+{
+  "error": {
+    "type": "unauthorized",
+    "message": "Missing or invalid access token."
+  }
+}
+```
+
+### Tables Used
 
 ```text
 users
 ```
+
 
 ---
 

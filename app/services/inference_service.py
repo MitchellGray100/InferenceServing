@@ -72,6 +72,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
         )
         status_code = upstream_response.status_code
         response_body = parse_upstream_json(upstream_response)
+        error_type = classify_upstream_status(status_code)
         logger.info(
             "Inference upstream completed project_id=%s model=%s status=%s.",
             identity["projectID"],
@@ -208,6 +209,15 @@ def ensure_deployment_running(deployment: dict[str, Any]) -> None:
             message="Model deployment is not running.",
             status_code=409,
         )
+
+
+def classify_upstream_status(status_code: int) -> str | None:
+    """Return analytics error type for upstream HTTP status codes."""
+    if status_code >= 500:
+        return "upstream_5xx"
+    if status_code >= 400:
+        return "upstream_4xx"
+    return None
 
 
 def build_vllm_url(deployment: dict[str, Any], path: str) -> str:

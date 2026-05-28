@@ -1206,6 +1206,12 @@ Side-effecting model control-plane endpoints require an `Idempotency-Key`
 header. The same key with the same request replays the original response, while
 the same key with a different request returns `idempotency_key_conflict`.
 
+User-controlled deployment settings are intentionally narrow in the MVP.
+Clients provide the model name, Hugging Face model ID, replica/autoscaling
+settings, CPU/memory/GPU counts, dtype, and max model length. MiniTen owns image
+selection and rejects custom `vllm.image` values, unsupported fields, invalid
+resource quantities, invalid dtype values, and inconsistent autoscaling bounds.
+
 Each create/start/stop/scale/delete command stores a `desired_generation` on
 both `model_deployments` and `deployment_jobs`. The worker skips jobs whose
 generation is older than the current deployment generation, which prevents stale
@@ -1271,6 +1277,23 @@ Autoscaling is supported in the MVP.
 MiniTen uses a shared PVC-backed Hugging Face cache by default. When autoscaling creates more than one replica for a deployment, the configured storage class must support mounting that cache across replicas with a compatible access mode such as `ReadWriteMany`.
 
 If the local or cloud cluster does not support a compatible shared volume mode, the deployment may still run with one replica, but multi-replica autoscaling with a shared cache is not guaranteed.
+
+### Validation Rules
+
+```text
+name: project-local deployment name accepted by MiniTen name validation
+model_id: string, max 255 characters
+replicas: integer from 0 to 100
+resources.cpu_request/cpu_limit: positive CPU quantity such as "500m" or "2"
+resources.memory_request/memory_limit: positive memory quantity such as "512Mi" or "8Gi"
+resources.gpu_count: integer from 0 to 16
+vllm.dtype: auto, float16, half, bfloat16, float, or float32
+vllm.max_model_len: integer up to 262144
+autoscaling.min_replicas <= autoscaling.max_replicas
+replicas must be inside autoscaling min/max when autoscaling is enabled
+vllm.image is rejected because MiniTen selects managed CPU/GPU images
+unknown fields are rejected
+```
 
 ### Behavior
 
@@ -1521,6 +1544,96 @@ deployment_jobs
 
 ---
 
+## 6.4.1 Get model status
+
+```http
+GET /v1/projects/{projectID}/models/{modelDeploymentID}/status
+```
+
+### Purpose
+
+Returns a compact debugging view for one model deployment.
+
+Used by:
+
+```text
+Model detail page
+CLI inspect/status command
+Deployment troubleshooting
+```
+
+### Auth
+
+User auth token required.
+
+### Permissions
+
+```text
+owner, member, viewer
+```
+
+### Behavior
+
+```text
+1. Verify user can view the project.
+2. Fetch model_deployments row, including deleted rows.
+3. Fetch the latest deployment_jobs rows.
+4. Best-effort inspect live Kubernetes Deployment, Service, and Pod readiness.
+5. Best-effort fetch a short recent pod log snippet.
+6. Return DB state even if Kubernetes is unreachable.
+```
+
+### Response
+
+```json
+{
+  "modelDeployment": {
+    "modelDeploymentID": "7a16ad8b-3d7d-4dd3-9a63-c4e3bbf29c18",
+    "name": "qwen-small-prod",
+    "status": "running",
+    "replicas": 2,
+    "desired_generation": 3
+  },
+  "latestDeploymentJob": {
+    "deploymentJobID": "3ef7d993-cb61-4392-b36b-2ed2e1d88af1",
+    "job_type": "update_model",
+    "status": "succeeded",
+    "last_error": null
+  },
+  "recentDeploymentJobs": [],
+  "kubernetes": {
+    "available": true,
+    "reason": null,
+    "readiness": {
+      "ready": true,
+      "failed": false,
+      "failure_code": null,
+      "deployment_available": true,
+      "available_replicas": 2,
+      "scheduled_pods": 2,
+      "ready_pods": 2,
+      "pod_count": 2,
+      "pods": []
+    },
+    "recentLogs": []
+  }
+}
+```
+
+If Kubernetes is unavailable, `kubernetes.available` is `false` and `reason`
+contains the inspection error. The endpoint still returns durable database
+state and recent job history.
+
+### Tables used
+
+```text
+project_members
+model_deployments
+deployment_jobs
+```
+
+---
+
 ## 6.5 Scale model
 
 ```http
@@ -1570,8 +1683,8 @@ owner, member
 
 ### Important Rules
 
-This endpoint only changes the desired replica count for the MVP. Resource,
-vLLM, autoscaling, and model ID changes are intentionally deferred.
+This endpoint only changes the desired replica count. Use the settings update
+endpoint to change resources, autoscaling, and vLLM runtime settings.
 
 ### Response
 
@@ -1603,6 +1716,64 @@ deployment_jobs
 None directly in the request handler.
 The Deployment Worker patches Deployment and HPA resources.
 ```
+
+---
+
+## 6.5.1 Update model settings
+
+```http
+PATCH /v1/projects/{projectID}/models/{modelDeploymentID}
+Idempotency-Key: <required>
+```
+
+### Purpose
+
+Updates deployment settings and queues a Kubernetes reapply.
+
+### Request
+
+All fields are optional. `name`, `model_id`, and `vllm.image` cannot be changed
+by clients. The same validation rules from model creation apply after merging
+the partial update with current settings.
+
+```json
+{
+  "replicas": 1,
+  "resources": {
+    "cpu_request": "2",
+    "cpu_limit": "4",
+    "memory_request": "8Gi",
+    "memory_limit": "16Gi",
+    "gpu_count": 1
+  },
+  "vllm": {
+    "dtype": "auto",
+    "max_model_len": 4096
+  },
+  "autoscaling": {
+    "enabled": false
+  }
+}
+```
+
+### Behavior
+
+MiniTen merges the provided fields with existing deployment settings, selects
+the managed CPU or GPU vLLM image from `gpu_count`, increments
+`desired_generation`, and inserts an `update_model` deployment job.
+
+---
+
+## 6.5.2 Sync model status
+
+```http
+POST /v1/projects/{projectID}/models/{modelDeploymentID}/sync
+Idempotency-Key: <required>
+```
+
+Queues a `sync_status` job. The worker reads live Kubernetes Deployment,
+Service, and Pod readiness and updates MiniTen status to `running`, `stopped`,
+`deploying`, or `failed`.
 
 ---
 

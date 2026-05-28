@@ -445,7 +445,10 @@ test also uses a short context length and a larger memory limit than the fast
 smoke test because CPU vLLM has meaningful startup overhead. Model pods use `imagePullPolicy:
 IfNotPresent` so restarts reuse images already present in the node image store.
 In kind, that cache is inside the kind node container's containerd store, not
-necessarily the host Docker Images view.
+necessarily the host Docker Images view. Local cleanup preserves this cache by
+default: `make clean-env` resets Compose/Postgres and the setup marker but keeps
+the kind cluster. `make clean-kind` intentionally deletes the kind cluster and
+its image cache, and `make clean-all` performs both cleanup paths.
 
 The Deployment Worker:
 
@@ -454,18 +457,32 @@ The Deployment Worker:
 - Compares job `desired_generation` with the current model deployment generation.
 - Marks stale jobs `skipped` without changing Kubernetes.
 - Calls the Kubernetes API.
-- Waits for Kubernetes readiness before marking deploy/start/scale jobs successful.
+- Reapplies Kubernetes resources for `deploy_model`, `update_model`, and `start_model`.
+- Waits for Kubernetes readiness before marking deploy/update/start/scale jobs successful.
 - Detects pod scheduling, pod readiness, Service existence, Deployment availability, and common failed pod states such as image pull and crash-loop errors.
+- Classifies worker failures into stable categories such as `image_pull`,
+  `insufficient_memory`, `insufficient_cpu`, `gpu_unavailable`,
+  `model_download_auth`, `invalid_model_or_chat_template`,
+  `readiness_timeout`, and `pod_failure`.
 - Updates `model_deployments`.
 - Writes `model_events`.
-- Retries failed jobs when appropriate.
+- Retries failed jobs when appropriate and stores the category-prefixed error in
+  `deployment_jobs.last_error`.
 
 The Reconciler:
 
 - Periodically reads live Kubernetes Deployment, Pod, Service, and HPA state.
 - Compares Kubernetes state with `model_deployments`.
 - Corrects stale product statuses such as `deploying`, `loading`, `running`, `stopped`, and `failed`.
-- Can enqueue or process `sync_status` work when a deployment needs explicit reconciliation.
+- Processes explicit `sync_status` work when a deployment needs reconciliation,
+  updating DB status from live Kubernetes readiness without changing desired generation.
+
+The API also exposes `GET /v1/projects/{projectID}/models/{modelDeploymentID}/status`
+for on-demand troubleshooting. It joins durable model metadata, recent
+deployment jobs, best-effort live Kubernetes readiness, pod summaries, and a
+short recent log snippet. Kubernetes inspection failures do not fail the status
+endpoint; they are returned as `kubernetes.available=false` so operators can
+still see the database state and latest command history.
 
 ---
 
@@ -494,6 +511,14 @@ The deployment name is used for:
 - Kubernetes resource naming.
 
 The Hugging Face model ID is stored as metadata and passed to vLLM.
+
+MiniTen owns container image selection. Users provide model IDs and deployment
+settings, not arbitrary image names. CPU-only deployments use the managed CPU
+vLLM image, GPU deployments use the managed GPU vLLM image, and local debug
+smoke tests can select the lightweight smoke image only through MiniTen's
+internal smoke model ID. The API rejects unsupported fields, invalid
+CPU/memory quantities, invalid dtype values, and autoscaling settings where the
+desired replica count falls outside min/max bounds.
 
 Deployment names must be unique within a project:
 

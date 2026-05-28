@@ -11,6 +11,7 @@ from app.services import model_deployment_service
 from app.services.model_deployment_service import (
     build_job_payload,
     build_k8s_names,
+    get_model_deployment_status,
     model_deployment_not_found_error,
     serialize_deployment_job,
     serialize_model_deployment,
@@ -200,6 +201,28 @@ def test_list_model_deployment_jobs_route(monkeypatch, client, auth_headers) -> 
     assert response.get_json() == expected
 
 
+def test_get_model_deployment_status_route(monkeypatch, client, auth_headers) -> None:
+    expected = {
+        "modelDeployment": model_deployment_response(),
+        "latestDeploymentJob": deployment_job_response(),
+        "recentDeploymentJobs": [deployment_job_response()],
+        "kubernetes": {"available": False, "reason": "offline"},
+    }
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service."
+        "get_model_deployment_status",
+        lambda user_id, project_id, model_deployment_id: expected,
+    )
+
+    response = client.get(
+        f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/status",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected
+
+
 def test_list_model_logs_route(monkeypatch, client, auth_headers) -> None:
     expected = {"model": model_deployment_response(), "logs": [{"pod": "pod-a", "text": "ok"}]}
 
@@ -247,6 +270,38 @@ def test_list_model_logs_service(monkeypatch) -> None:
 
     assert response["logs"] == [{"pod": "pod-a", "text": "ok"}]
     assert fake.cursor.executed[-1][1]["name"] == "qwen-small-prod"
+
+
+def test_get_model_deployment_status_service(monkeypatch) -> None:
+    deployment = deployment_row_fixture()
+    job = deployment_job_row_fixture()
+    fake = FakeTransaction(fetchones=[{"role": "viewer"}, deployment])
+    fake.cursor.fetchall_rows = [job]
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        model_deployment_service,
+        "inspect_kubernetes_status",
+        lambda deployment: {"available": False, "reason": "cluster unavailable"},
+    )
+
+    response = get_model_deployment_status(USER_ID, PROJECT_ID, MODEL_DEPLOYMENT_ID)
+
+    assert response["modelDeployment"]["modelDeploymentID"] == MODEL_DEPLOYMENT_ID
+    assert response["latestDeploymentJob"]["deploymentJobID"] == DEPLOYMENT_JOB_ID
+    assert response["kubernetes"]["reason"] == "cluster unavailable"
+
+
+def test_inspect_kubernetes_status_reports_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        model_deployment_service.k8s_client,
+        "create_clients",
+        lambda: (_ for _ in ()).throw(RuntimeError("cluster offline")),
+    )
+
+    response = model_deployment_service.inspect_kubernetes_status(deployment_row_fixture())
+
+    assert response["available"] is False
+    assert response["reason"] == "cluster offline"
 
 
 def test_parse_log_tail_rejects_bad_values() -> None:
@@ -306,6 +361,46 @@ def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None
 
     assert response.status_code == 202
     assert response.get_json() == command_response("scale_model")
+
+
+def test_update_model_deployment_settings_route(monkeypatch, client, auth_headers) -> None:
+    bypass_idempotency(monkeypatch)
+
+    def update_settings(user_id, project_id, model_deployment_id, data):
+        assert data["resources"]["gpu_count"] == 1
+        return command_response("update_model")
+
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service."
+        "update_model_deployment_settings",
+        update_settings,
+    )
+
+    response = client.patch(
+        f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}",
+        json={"resources": {"gpu_count": 1}},
+        headers=idempotency_headers(auth_headers, "update-model"),
+    )
+
+    assert response.status_code == 202
+    assert response.get_json() == command_response("update_model")
+
+
+def test_sync_model_deployment_status_route(monkeypatch, client, auth_headers) -> None:
+    bypass_idempotency(monkeypatch)
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service."
+        "sync_model_deployment_status",
+        lambda user_id, project_id, model_deployment_id: command_response("sync_status"),
+    )
+
+    response = client.post(
+        f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/sync",
+        headers=idempotency_headers(auth_headers, "sync-model"),
+    )
+
+    assert response.status_code == 202
+    assert response.get_json() == command_response("sync_status")
 
 
 def test_delete_model_deployment_route(monkeypatch, client, auth_headers) -> None:
@@ -421,6 +516,85 @@ def test_validate_deployment_spec_rejects_bad_autoscaling(app) -> None:
     assert error.value.type == "validation_error"
 
 
+def test_validate_deployment_spec_rejects_unknown_fields(app) -> None:
+    with app.app_context(), pytest.raises(ApiError) as error:
+        validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "resources": {"bad": "field"},
+            }
+        )
+
+    assert error.value.type == "validation_error"
+    assert error.value.details["unsupported_fields"] == ["bad"]
+
+
+def test_validate_deployment_spec_rejects_bad_resource_quantities(app) -> None:
+    with app.app_context(), pytest.raises(ApiError) as error:
+        validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "resources": {"cpu_request": "fast"},
+            }
+        )
+
+    assert "CPU quantity" in error.value.message
+
+
+def test_validate_deployment_spec_rejects_bad_dtype(app) -> None:
+    with app.app_context(), pytest.raises(ApiError) as error:
+        validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "vllm": {"dtype": "int2"},
+            }
+        )
+
+    assert error.value.details["field"] == "dtype"
+
+
+def test_validate_deployment_spec_rejects_replicas_outside_autoscaling(app) -> None:
+    with app.app_context(), pytest.raises(ApiError) as error:
+        validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "replicas": 1,
+                "autoscaling": {
+                    "enabled": True,
+                    "min_replicas": 2,
+                    "max_replicas": 4,
+                },
+            }
+        )
+
+    assert "min_replicas" in error.value.message
+
+
+def test_validate_deployment_update_reselects_gpu_image(app) -> None:
+    current = deployment_row_fixture()
+    with app.app_context():
+        spec = model_deployment_service.validate_deployment_update(
+            {"resources": {"gpu_count": 1}},
+            current,
+        )
+
+    assert spec["name"] == current["name"]
+    assert spec["gpu_count"] == 1
+    assert spec["vllm_image"] == "vllm/vllm-openai:latest"
+
+
+def test_validate_deployment_update_rejects_identity_changes(app) -> None:
+    with app.app_context(), pytest.raises(ApiError):
+        model_deployment_service.validate_deployment_update(
+            {"model_id": "other/model"},
+            deployment_row_fixture(),
+        )
+
+
 def test_build_k8s_names() -> None:
     assert build_k8s_names("miniten-personal", "qwen-small-prod") == {
         "k8s_namespace": "miniten-personal",
@@ -501,9 +675,26 @@ def deployment_row_fixture() -> dict[str, object]:
     }
 
 
+def deployment_job_row_fixture() -> dict[str, object]:
+    return {
+        "deployment_job_id": DEPLOYMENT_JOB_ID,
+        "project_id": PROJECT_ID,
+        "model_deployment_id": MODEL_DEPLOYMENT_ID,
+        "job_type": "deploy_model",
+        "desired_generation": 1,
+        "status": "queued",
+        "attempts": 0,
+        "max_attempts": 3,
+        "last_error": None,
+        "created_at": datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+        "updated_at": datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+    }
+
+
 class FakeCursor:
     def __init__(self, *, fetchones=None):
         self.fetchones = list(fetchones or [])
+        self.fetchall_rows = []
         self.executed = []
 
     def execute(self, sql, params=None):
@@ -511,6 +702,9 @@ class FakeCursor:
 
     def fetchone(self):
         return self.fetchones.pop(0) if self.fetchones else None
+
+    def fetchall(self):
+        return self.fetchall_rows
 
 
 class FakeConnection:

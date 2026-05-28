@@ -1,7 +1,7 @@
 PYTHON ?= python
 POETRY ?= $(PYTHON) -m poetry
 
-.PHONY: install setup-env clean-env migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test-local-apis test-local-k8s test-local-vllm tests coverage lint compile clean
+.PHONY: install setup-env clean-env clean-kind clean-all migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test-local-apis test-local-k8s test-local-vllm tests coverage lint compile clean
 
 install:
 	$(PYTHON) -m pip install --upgrade pip poetry
@@ -18,8 +18,13 @@ setup-env: install
 
 clean-env:
 	docker compose down -v --remove-orphans
+	$(POETRY) run python scripts/local_env_guard.py clear-setup-marker
+
+clean-kind:
 	$(POETRY) run python scripts/kind_env.py delete
 	$(POETRY) run python scripts/local_env_guard.py clear-setup-marker
+
+clean-all: clean-env clean-kind
 
 migrate:
 	$(POETRY) run python -m app.db.migrate

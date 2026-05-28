@@ -229,9 +229,27 @@ def test_dispatch_job_calls_apply_for_deploy_and_start(monkeypatch) -> None:
     )
 
     deployment_worker.dispatch_job(FakeClients(), job_row("deploy_model"), deployment_row())
+    deployment_worker.dispatch_job(FakeClients(), job_row("update_model"), deployment_row())
     deployment_worker.dispatch_job(FakeClients(), job_row("start_model"), deployment_row())
 
-    assert calls == ["qwen-small-prod", "qwen-small-prod"]
+    assert calls == ["qwen-small-prod", "qwen-small-prod", "qwen-small-prod"]
+
+
+def test_dispatch_job_sync_status_sets_synced_status(monkeypatch) -> None:
+    deployment = deployment_row()
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
+    monkeypatch.setattr(
+        deployment_worker.deployment_manager,
+        "inspect_model_readiness",
+        lambda clients, deployment, expected_replicas: {
+            "failed": False,
+            "ready": True,
+        },
+    )
+
+    deployment_worker.dispatch_job(FakeClients(), job_row("sync_status"), deployment)
+
+    assert deployment["_synced_status"] == "running"
 
 
 def test_dispatch_job_calls_scale_for_stop_and_scale(monkeypatch) -> None:
@@ -285,6 +303,23 @@ def test_should_fail_permanently() -> None:
 def test_truncate_error() -> None:
     assert deployment_worker.truncate_error("short") == "short"
     assert deployment_worker.truncate_error("abcdef", max_length=5) == "ab..."
+
+
+def test_classify_failure_returns_actionable_category() -> None:
+    failure = deployment_worker.classify_failure(
+        RuntimeError("Pod model is waiting with ImagePullBackOff")
+    )
+
+    assert failure["category"] == "image_pull"
+    assert "registry" in failure["hint"]
+
+
+def test_classify_failure_detects_chat_template_issue() -> None:
+    failure = deployment_worker.classify_failure(
+        RuntimeError("default chat template is no longer allowed")
+    )
+
+    assert failure["category"] == "invalid_model_or_chat_template"
 
 
 def test_update_deployment_status_with_cursor() -> None:

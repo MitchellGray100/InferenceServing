@@ -138,6 +138,31 @@ SET
 WHERE model_deployment_id = %(model_deployment_id)s
 RETURNING *;
 
+-- name: advance_model_deployment_settings
+-- Store a new desired deployment spec before queueing update work. This
+-- reapplies the full Kubernetes Deployment so CPU/GPU image selection,
+-- resources, autoscaling, and vLLM settings move together in one generation.
+UPDATE model_deployments
+SET
+  replicas = %(replicas)s,
+  status = 'deploying',
+  cpu_request = %(cpu_request)s,
+  cpu_limit = %(cpu_limit)s,
+  memory_request = %(memory_request)s,
+  memory_limit = %(memory_limit)s,
+  gpu_count = %(gpu_count)s,
+  vllm_image = %(vllm_image)s,
+  vllm_dtype = %(vllm_dtype)s,
+  vllm_max_model_len = %(vllm_max_model_len)s,
+  autoscaling_enabled = %(autoscaling_enabled)s,
+  min_replicas = %(min_replicas)s,
+  max_replicas = %(max_replicas)s,
+  target_cpu_utilization = %(target_cpu_utilization)s,
+  desired_generation = desired_generation + 1,
+  updated_at = CURRENT_TIMESTAMP
+WHERE model_deployment_id = %(model_deployment_id)s
+RETURNING *;
+
 -- name: mark_model_deployment_deleted
 -- Worker-facing hard completion marker after Kubernetes resources are removed.
 UPDATE model_deployments

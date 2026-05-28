@@ -69,6 +69,35 @@ def get_model_deployment(
     return jsonify(response), 200
 
 
+@bp.patch("/<project_id>/models/<model_deployment_id>")
+@require_user_auth
+def update_model_deployment_settings(
+    project_id: str,
+    model_deployment_id: str,
+) -> tuple[object, int]:
+    """Update deployment settings and enqueue Kubernetes reapply work."""
+    data = require_json_object(request.get_json(silent=True))
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
+        project_id=project_id,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body=data,
+        action=lambda: (
+            model_deployment_service.update_model_deployment_settings(
+                user_id=user_id,
+                project_id=project_id,
+                model_deployment_id=model_deployment_id,
+                data=data,
+            ),
+            202,
+        ),
+    )
+    return jsonify(response), status
+
+
 @bp.get("/<project_id>/models/<model_deployment_id>/jobs")
 @require_user_auth
 def list_model_deployment_jobs(
@@ -77,6 +106,21 @@ def list_model_deployment_jobs(
 ) -> tuple[object, int]:
     """Return deployment command history for one model deployment."""
     response = model_deployment_service.list_model_deployment_jobs(
+        current_user_id(),
+        project_id,
+        model_deployment_id,
+    )
+    return jsonify(response), 200
+
+
+@bp.get("/<project_id>/models/<model_deployment_id>/status")
+@require_user_auth
+def get_model_deployment_status(
+    project_id: str,
+    model_deployment_id: str,
+) -> tuple[object, int]:
+    """Return DB, job, and live Kubernetes status for one deployment."""
+    response = model_deployment_service.get_model_deployment_status(
         current_user_id(),
         project_id,
         model_deployment_id,
@@ -185,6 +229,33 @@ def scale_model_deployment(
                 project_id=project_id,
                 model_deployment_id=model_deployment_id,
                 replicas=require_field(data, "replicas"),
+            ),
+            202,
+        ),
+    )
+    return jsonify(response), status
+
+
+@bp.post("/<project_id>/models/<model_deployment_id>/sync")
+@require_user_auth
+def sync_model_deployment_status(
+    project_id: str,
+    model_deployment_id: str,
+) -> tuple[object, int]:
+    """Enqueue status reconciliation from live Kubernetes state."""
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
+        project_id=project_id,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body={},
+        action=lambda: (
+            model_deployment_service.sync_model_deployment_status(
+                user_id,
+                project_id,
+                model_deployment_id,
             ),
             202,
         ),

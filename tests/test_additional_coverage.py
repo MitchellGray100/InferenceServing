@@ -509,7 +509,7 @@ def test_worker_failure_marks_retrying(monkeypatch) -> None:
     )
 
     assert events[0]["will_retry"] is True
-    assert fake.cursor.executed[-1]["last_error"] == "temporary"
+    assert fake.cursor.executed[-1]["last_error"] == "unknown: temporary"
 
 
 def test_worker_failure_marks_permanent_failed(monkeypatch) -> None:
@@ -534,7 +534,7 @@ def test_worker_failure_marks_permanent_failed(monkeypatch) -> None:
     )
 
     assert events[0]["will_retry"] is False
-    assert fake.cursor.executed[-1]["last_error"] == "permanent"
+    assert fake.cursor.executed[-1]["last_error"] == "unknown: permanent"
 
 
 class FakeApiException(Exception):

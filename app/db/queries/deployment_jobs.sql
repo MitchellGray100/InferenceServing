@@ -104,3 +104,11 @@ SELECT *
 FROM deployment_jobs
 WHERE model_deployment_id = %(model_deployment_id)s
 ORDER BY created_at DESC;
+
+-- name: list_recent_deployment_jobs_for_model
+-- Fetch the most recent command history rows for a compact status view.
+SELECT *
+FROM deployment_jobs
+WHERE model_deployment_id = %(model_deployment_id)s
+ORDER BY created_at DESC
+LIMIT %(limit)s;

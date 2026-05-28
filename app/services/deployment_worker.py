@@ -33,21 +33,43 @@ logger = logging.getLogger(__name__)
 
 SUCCESS_EVENT_TYPES = {
     "deploy_model": "model_running",
+    "update_model": "model_updated",
     "start_model": "model_started",
     "stop_model": "model_stopped",
     "scale_model": "model_scaled",
     "delete_model": "model_deleted",
+    "sync_status": "model_status_synced",
 }
 SUCCESS_MESSAGES = {
     "deploy_model": "Model deployment applied to Kubernetes.",
+    "update_model": "Model deployment settings applied to Kubernetes.",
     "start_model": "Model deployment started.",
     "stop_model": "Model deployment stopped.",
     "scale_model": "Model deployment scaled.",
     "delete_model": "Model deployment deleted.",
+    "sync_status": "Model deployment status reconciled from Kubernetes.",
 }
-RUNNING_STATUSES = {"deploy_model": "running", "start_model": "running"}
+RUNNING_STATUSES = {"deploy_model": "running", "update_model": "running", "start_model": "running"}
 STOPPED_STATUSES = {"stop_model": "stopped"}
 SKIPPED_STATUS = "skipped"
+
+FAILURE_CATEGORIES = {
+    "imagepullbackoff": "image_pull",
+    "errimagepull": "image_pull",
+    "invalidimagename": "image_pull",
+    "oomkilled": "insufficient_memory",
+    "insufficient memory": "insufficient_memory",
+    "failed to infer device type": "gpu_unavailable",
+    "no cuda": "gpu_unavailable",
+    "cuda": "gpu_unavailable",
+    "nvidia": "gpu_unavailable",
+    "hf_token": "model_download_auth",
+    "hugging face": "model_download_auth",
+    "401": "model_download_auth",
+    "403": "model_download_auth",
+    "chat template": "invalid_model_or_chat_template",
+    "tokenizer": "invalid_model_or_chat_template",
+}
 
 
 @dataclass(frozen=True)
@@ -193,6 +215,14 @@ def dispatch_job(
         )
         return
 
+    if job_type == "update_model":
+        deployment_manager.apply_model_deployment(
+            clients,
+            deployment,
+            hugging_face_token=Config.HUGGING_FACE_TOKEN,
+        )
+        return
+
     if job_type == "start_model":
         deployment_manager.apply_model_deployment(
             clients,
@@ -215,6 +245,22 @@ def dispatch_job(
 
     if job_type == "delete_model":
         deployment_manager.delete_model_deployment(clients, deployment)
+        return
+
+    if job_type == "sync_status":
+        status = deployment_manager.inspect_model_readiness(
+            clients,
+            deployment,
+            expected_replicas=int(deployment.get("replicas") or 0),
+        )
+        if status["failed"]:
+            deployment["_synced_status"] = "failed"
+        elif status["ready"]:
+            deployment["_synced_status"] = (
+                "running" if int(deployment.get("replicas") or 0) > 0 else "stopped"
+            )
+        else:
+            deployment["_synced_status"] = "deploying"
         return
 
     raise RuntimeError(f"unsupported deployment job type: {job_type}")
@@ -244,6 +290,12 @@ def mark_job_succeeded(job: dict[str, Any], deployment: dict[str, Any]) -> None:
                     job["model_deployment_id"],
                     STOPPED_STATUSES[job_type],
                 )
+            elif job_type == "sync_status":
+                deployment = update_deployment_status_with_cursor(
+                    cur,
+                    job["model_deployment_id"],
+                    infer_synced_status(deployment),
+                )
 
             create_model_event_with_cursor(
                 cur,
@@ -256,6 +308,15 @@ def mark_job_succeeded(job: dict[str, Any], deployment: dict[str, Any]) -> None:
                 queries.get("mark_deployment_job_succeeded"),
                 {"deployment_job_id": job["deployment_job_id"]},
             )
+
+
+def infer_synced_status(deployment: dict[str, Any]) -> str:
+    """Return a conservative DB status after explicit status reconciliation."""
+    if deployment.get("_synced_status"):
+        return deployment["_synced_status"]
+    if deployment.get("status") in {"deleting", "deleted"}:
+        return deployment["status"]
+    return "running" if int(deployment.get("replicas") or 0) > 0 else "stopped"
 
 
 def mark_job_skipped(job: dict[str, Any]) -> None:
@@ -271,6 +332,7 @@ def mark_job_skipped(job: dict[str, Any]) -> None:
 def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
     """Persist retry/failure state after a job raises."""
     permanent_failure = should_fail_permanently(job)
+    failure = classify_failure(exc)
     query_name = (
         "mark_deployment_job_failed"
         if permanent_failure
@@ -297,7 +359,9 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
                     {
                         "deployment_job_id": str(job["deployment_job_id"]),
                         "job_type": job["job_type"],
-                        "error": str(exc),
+                        "error": failure["message"],
+                        "category": failure["category"],
+                        "hint": failure["hint"],
                         "will_retry": not permanent_failure,
                     },
                 )
@@ -306,7 +370,9 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
                 queries.get(query_name),
                 {
                     "deployment_job_id": job["deployment_job_id"],
-                    "last_error": truncate_error(str(exc)),
+                    "last_error": truncate_error(
+                        f"{failure['category']}: {failure['message']}"
+                    ),
                 },
             )
 
@@ -314,6 +380,42 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
 def should_fail_permanently(job: dict[str, Any]) -> bool:
     """Return whether the next failed attempt should exhaust the job."""
     return int(job["attempts"]) + 1 >= int(job["max_attempts"])
+
+
+def classify_failure(exc: Exception) -> dict[str, str]:
+    """Classify worker failures into stable, user-actionable categories."""
+    message = str(exc) or exc.__class__.__name__
+    lowered = message.lower()
+    category = "unknown"
+
+    for needle, candidate in FAILURE_CATEGORIES.items():
+        if needle in lowered:
+            category = candidate
+            break
+    if category == "unknown" and "timed out waiting for kubernetes model readiness" in lowered:
+        category = "readiness_timeout"
+
+    return {
+        "category": category,
+        "message": message,
+        "hint": failure_hint(category),
+    }
+
+
+def failure_hint(category: str) -> str:
+    """Return a short operator hint for a worker failure category."""
+    hints = {
+        "image_pull": "Check the managed image name, tag availability, and registry access.",
+        "insufficient_memory": "Increase memory limits or choose a smaller model/context length.",
+        "insufficient_cpu": "Increase CPU capacity or reduce requested CPU.",
+        "gpu_unavailable": "Schedule on a node with advertised GPU resources or use a CPU deployment.",
+        "model_download_auth": "Set a Hugging Face token for gated or rate-limited models.",
+        "invalid_model_or_chat_template": "Use an instruction/chat model with a compatible tokenizer chat template.",
+        "readiness_timeout": "Inspect pod logs and events; the container did not become ready in time.",
+        "pod_failure": "Inspect pod status, events, and logs for the Kubernetes failure reason.",
+        "unknown": "Inspect worker logs, Kubernetes events, and pod logs for the root cause.",
+    }
+    return hints[category]
 
 
 def update_deployment_status_with_cursor(

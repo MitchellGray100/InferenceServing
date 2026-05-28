@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # persists the database-facing job type string.
 JOB_TYPES = {
     "deploy": "deploy_model",
+    "update": "update_model",
     "start": "start_model",
     "stop": "stop_model",
     "scale": "scale_model",
@@ -64,6 +65,26 @@ MAX_GPU_COUNT = 16
 MAX_MODEL_LEN = 262_144
 DEFAULT_LOG_TAIL_LINES = 200
 MAX_LOG_TAIL_LINES = 1000
+STATUS_JOB_LIMIT = 5
+STATUS_LOG_TAIL_LINES = 50
+
+TOP_LEVEL_CREATE_FIELDS = {"name", "model_id", "replicas", "resources", "vllm", "autoscaling"}
+TOP_LEVEL_UPDATE_FIELDS = {"replicas", "resources", "vllm", "autoscaling"}
+RESOURCE_FIELDS = {
+    "cpu_request",
+    "cpu_limit",
+    "memory_request",
+    "memory_limit",
+    "gpu_count",
+}
+VLLM_FIELDS = {"dtype", "max_model_len"}
+AUTOSCALING_FIELDS = {
+    "enabled",
+    "min_replicas",
+    "max_replicas",
+    "target_cpu_utilization",
+}
+ALLOWED_VLLM_DTYPES = {"auto", "float16", "half", "bfloat16", "float", "float32"}
 
 
 def create_model_deployment(
@@ -234,6 +255,57 @@ def list_model_deployment_jobs(
     return {"deploymentJobs": [serialize_deployment_job(row) for row in rows]}
 
 
+def get_model_deployment_status(
+    user_id: Any,
+    project_id: Any,
+    model_deployment_id: Any,
+) -> dict[str, Any]:
+    """Return a compact status view for debugging one deployment.
+
+    The response joins durable control-plane state with best-effort live
+    Kubernetes state. Kubernetes failures are reported in the status payload
+    instead of failing the endpoint, because this view is most useful while the
+    cluster is unhealthy.
+    """
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+    canonical_model_deployment_id = validate_uuid(
+        model_deployment_id,
+        "modelDeploymentID",
+    )
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
+            require_role(role, VIEW_ROLES)
+            deployment = get_model_deployment_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+                include_deleted=True,
+            )
+            if deployment is None:
+                raise model_deployment_not_found_error()
+
+            cur.execute(
+                queries.get("list_recent_deployment_jobs_for_model"),
+                {
+                    "model_deployment_id": canonical_model_deployment_id,
+                    "limit": STATUS_JOB_LIMIT,
+                },
+            )
+            jobs = cur.fetchall()
+
+    kubernetes = inspect_kubernetes_status(deployment)
+    latest_job = serialize_deployment_job(jobs[0]) if jobs else None
+    return {
+        "modelDeployment": serialize_model_deployment(deployment),
+        "latestDeploymentJob": latest_job,
+        "recentDeploymentJobs": [serialize_deployment_job(row) for row in jobs],
+        "kubernetes": kubernetes,
+    }
+
+
 def list_model_logs(
     user_id: Any,
     project_id: Any,
@@ -397,6 +469,93 @@ def scale_model_deployment(
     }
 
 
+def update_model_deployment_settings(
+    user_id: Any,
+    project_id: Any,
+    model_deployment_id: Any,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Update desired deployment settings and enqueue Kubernetes reapply work."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+    canonical_model_deployment_id = validate_uuid(model_deployment_id, "modelDeploymentID")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
+            require_role(role, WRITE_ROLES)
+            current = get_model_deployment_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+            )
+            if current is None:
+                raise model_deployment_not_found_error()
+
+            spec = validate_deployment_update(data, current)
+            cur.execute(
+                queries.get("advance_model_deployment_settings"),
+                {
+                    "model_deployment_id": canonical_model_deployment_id,
+                    **spec,
+                },
+            )
+            deployment = cur.fetchone()
+            job = enqueue_deployment_job_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+                JOB_TYPES["update"],
+                build_job_payload("update_model", deployment),
+            )
+
+    logger.info(
+        "Enqueued model settings update model_deployment_id=%s project_id=%s job_id=%s.",
+        canonical_model_deployment_id,
+        canonical_project_id,
+        job["deployment_job_id"],
+    )
+    return {
+        "modelDeployment": serialize_model_deployment(deployment),
+        "deploymentJob": serialize_deployment_job(job),
+    }
+
+
+def sync_model_deployment_status(
+    user_id: Any,
+    project_id: Any,
+    model_deployment_id: Any,
+) -> dict[str, Any]:
+    """Enqueue a job that reconciles DB status from live Kubernetes state."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+    canonical_model_deployment_id = validate_uuid(model_deployment_id, "modelDeploymentID")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
+            require_role(role, WRITE_ROLES)
+            deployment = get_model_deployment_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+            )
+            if deployment is None:
+                raise model_deployment_not_found_error()
+            job = enqueue_deployment_job_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+                "sync_status",
+                build_job_payload("sync_status", deployment),
+            )
+
+    return {
+        "modelDeployment": serialize_model_deployment(deployment),
+        "deploymentJob": serialize_deployment_job(job),
+    }
+
+
 def delete_model_deployment(
     user_id: Any,
     project_id: Any,
@@ -500,10 +659,14 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
             message="Request body must be a JSON object.",
             status_code=400,
         )
+    reject_unknown_fields(data, TOP_LEVEL_CREATE_FIELDS, "deployment")
 
     resources = _optional_dict(data.get("resources"), "resources")
     vllm = _optional_dict(data.get("vllm"), "vllm")
     autoscaling = _optional_dict(data.get("autoscaling"), "autoscaling")
+    reject_unknown_fields(resources, RESOURCE_FIELDS, "resources")
+    reject_unknown_fields(vllm, VLLM_FIELDS | {"image"}, "vllm")
+    reject_unknown_fields(autoscaling, AUTOSCALING_FIELDS, "autoscaling")
 
     # Autoscaling fields are stored only when autoscaling is enabled. This keeps
     # non-autoscaled deployments simple: the worker reads `replicas` as the
@@ -535,6 +698,18 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
             message="min_replicas must be less than or equal to max_replicas.",
             status_code=400,
         )
+    if autoscaling_enabled and replicas < int(min_replicas or 1):
+        raise ApiError(
+            type="validation_error",
+            message="replicas must be greater than or equal to min_replicas.",
+            status_code=400,
+        )
+    if autoscaling_enabled and max_replicas and replicas > max_replicas:
+        raise ApiError(
+            type="validation_error",
+            message="replicas must be less than or equal to max_replicas.",
+            status_code=400,
+        )
 
     model_id = validate_string(
         data.get("model_id"),
@@ -559,32 +734,30 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
         "name": validate_deployment_name(data.get("name")),
         "model_id": model_id,
         "replicas": replicas,
-        "cpu_request": _optional_resource_text(
+        "cpu_request": _validate_cpu_quantity(
             resources.get("cpu_request"),
             "cpu_request",
             DEFAULT_CPU_REQUEST,
         ),
-        "cpu_limit": _optional_resource_text(
+        "cpu_limit": _validate_cpu_quantity(
             resources.get("cpu_limit"),
             "cpu_limit",
             DEFAULT_CPU_LIMIT,
         ),
-        "memory_request": _optional_resource_text(
+        "memory_request": _validate_memory_quantity(
             resources.get("memory_request"),
             "memory_request",
             DEFAULT_MEMORY_REQUEST,
         ),
-        "memory_limit": _optional_resource_text(
+        "memory_limit": _validate_memory_quantity(
             resources.get("memory_limit"),
             "memory_limit",
             DEFAULT_MEMORY_LIMIT,
         ),
         "gpu_count": gpu_count,
         "vllm_image": select_vllm_image(model_id, gpu_count),
-        "vllm_dtype": validate_string(
+        "vllm_dtype": validate_vllm_dtype(
             vllm.get("dtype", "auto"),
-            "dtype",
-            max_length=MAX_VLLM_DTYPE_LENGTH,
         ),
         "vllm_max_model_len": validate_positive_int(
             vllm.get("max_model_len", 4096),
@@ -603,6 +776,50 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
             max_value=100,
         ),
     }
+
+
+def validate_deployment_update(data: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Validate partial settings update input using existing values as defaults."""
+    if not isinstance(data, dict):
+        raise ApiError(
+            type="validation_error",
+            message="Request body must be a JSON object.",
+            status_code=400,
+        )
+    if "name" in data or "model_id" in data:
+        raise ApiError(
+            type="validation_error",
+            message="Model name and model_id cannot be changed after creation.",
+            status_code=400,
+        )
+    reject_unknown_fields(data, TOP_LEVEL_UPDATE_FIELDS | {"name", "model_id"}, "deployment")
+
+    merged = {
+        "name": current["name"],
+        "model_id": current["model_id"],
+        "replicas": data.get("replicas", current["replicas"]),
+        "resources": {
+            "cpu_request": current["cpu_request"],
+            "cpu_limit": current["cpu_limit"],
+            "memory_request": current["memory_request"],
+            "memory_limit": current["memory_limit"],
+            "gpu_count": current["gpu_count"],
+            **_optional_dict(data.get("resources"), "resources"),
+        },
+        "vllm": {
+            "dtype": current["vllm_dtype"],
+            "max_model_len": current["vllm_max_model_len"],
+            **_optional_dict(data.get("vllm"), "vllm"),
+        },
+        "autoscaling": {
+            "enabled": current["autoscaling_enabled"],
+            "min_replicas": current["min_replicas"],
+            "max_replicas": current["max_replicas"],
+            "target_cpu_utilization": current["target_cpu_utilization"],
+            **_optional_dict(data.get("autoscaling"), "autoscaling"),
+        },
+    }
+    return validate_deployment_spec(merged)
 
 
 def build_k8s_names(k8s_namespace: str, deployment_name: str) -> dict[str, str]:
@@ -710,6 +927,49 @@ def get_model_deployment_with_cursor(
         },
     )
     return cur.fetchone()
+
+
+def inspect_kubernetes_status(deployment: dict[str, Any]) -> dict[str, Any]:
+    """Return best-effort live Kubernetes readiness and log diagnostics."""
+    if deployment.get("status") == "deleted":
+        return {
+            "available": False,
+            "reason": "Deployment is deleted.",
+            "readiness": None,
+            "recentLogs": [],
+        }
+
+    try:
+        clients = k8s_client.create_clients()
+        readiness = deployment_manager.inspect_model_readiness(
+            clients,
+            deployment,
+            expected_replicas=int(deployment.get("replicas") or 0),
+        )
+        logs = deployment_manager.read_model_logs(
+            clients,
+            deployment,
+            tail_lines=STATUS_LOG_TAIL_LINES,
+        )
+    except Exception as exc:
+        logger.info(
+            "Live Kubernetes status unavailable model_deployment_id=%s: %s.",
+            deployment.get("model_deployment_id"),
+            exc,
+        )
+        return {
+            "available": False,
+            "reason": str(exc),
+            "readiness": None,
+            "recentLogs": [],
+        }
+
+    return {
+        "available": True,
+        "reason": readiness.get("reason"),
+        "readiness": readiness,
+        "recentLogs": logs,
+    }
 
 
 def parse_log_tail(value: Any) -> int:
@@ -888,6 +1148,75 @@ def _optional_resource_text(value: Any, field: str, default: str) -> str:
         field,
         max_length=MAX_RESOURCE_TEXT_LENGTH,
     )
+
+
+def reject_unknown_fields(
+    data: dict[str, Any],
+    allowed_fields: set[str],
+    field: str,
+) -> None:
+    """Reject unsupported object keys so typos do not silently do nothing."""
+    unknown = sorted(set(data) - allowed_fields)
+    if unknown:
+        raise ApiError(
+            type="validation_error",
+            message=f"{field} contains unsupported fields.",
+            status_code=400,
+            details={"field": field, "unsupported_fields": unknown},
+        )
+
+
+def _validate_cpu_quantity(value: Any, field: str, default: str) -> str:
+    """Validate the limited Kubernetes CPU quantity format accepted by the MVP."""
+    text = _optional_resource_text(value, field, default)
+    if text.endswith("m"):
+        number = text[:-1]
+        if number.isdigit() and int(number) > 0:
+            return text
+    elif text.isdigit() and int(text) > 0:
+        return text
+
+    raise ApiError(
+        type="validation_error",
+        message=f"{field} must be a positive CPU quantity such as '500m' or '2'.",
+        status_code=400,
+        details={"field": field},
+    )
+
+
+def _validate_memory_quantity(value: Any, field: str, default: str) -> str:
+    """Validate the limited Kubernetes memory quantity format accepted by the MVP."""
+    text = _optional_resource_text(value, field, default)
+    suffixes = ("Mi", "Gi")
+    for suffix in suffixes:
+        if text.endswith(suffix):
+            number = text[: -len(suffix)]
+            if number.isdigit() and int(number) > 0:
+                return text
+
+    raise ApiError(
+        type="validation_error",
+        message=f"{field} must be a positive memory quantity such as '512Mi' or '8Gi'.",
+        status_code=400,
+        details={"field": field},
+    )
+
+
+def validate_vllm_dtype(value: Any) -> str:
+    """Validate the supported vLLM dtype values exposed by the MVP API."""
+    dtype = validate_string(
+        value,
+        "dtype",
+        max_length=MAX_VLLM_DTYPE_LENGTH,
+    )
+    if dtype not in ALLOWED_VLLM_DTYPES:
+        raise ApiError(
+            type="validation_error",
+            message="dtype must be one of: auto, float16, half, bfloat16, float, float32.",
+            status_code=400,
+            details={"field": "dtype"},
+        )
+    return dtype
 
 
 def _optional_positive_int(

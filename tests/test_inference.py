@@ -232,6 +232,40 @@ def test_chat_completions_success_logs_request(monkeypatch, app) -> None:
     assert records[0]["error_type"] is None
 
 
+def test_chat_completions_records_upstream_http_errors(monkeypatch, app) -> None:
+    records = []
+    monkeypatch.setattr(
+        inference_service.api_key_service,
+        "authenticate_project_api_key",
+        lambda raw_key: {"apiKeyID": API_KEY_ID, "projectID": PROJECT_ID},
+    )
+    monkeypatch.setattr(
+        inference_service,
+        "get_deployment_for_inference",
+        lambda project_id, model_name: deployment_row(),
+    )
+    monkeypatch.setattr(
+        inference_service.requests,
+        "post",
+        lambda url, json, timeout: FakeResponse({"error": {"message": "bad"}}, 400),
+    )
+    monkeypatch.setattr(
+        inference_service,
+        "record_inference_request",
+        lambda **kwargs: records.append(kwargs),
+    )
+
+    with app.app_context():
+        body, status = inference_service.chat_completions(
+            "raw-key",
+            {"model": "qwen-small-prod", "messages": []},
+        )
+
+    assert status == 400
+    assert body["error"]["message"] == "bad"
+    assert records[0]["error_type"] == "upstream_4xx"
+
+
 def test_chat_completions_rejects_streaming_before_proxy(monkeypatch, app) -> None:
     monkeypatch.setattr(
         inference_service.api_key_service,

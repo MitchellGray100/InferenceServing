@@ -161,7 +161,9 @@ CREATE TABLE model_events (
     'model_running',
     'model_stopped',
     'model_started',
+    'model_updated',
     'model_scaled',
+    'model_status_synced',
     'model_failed',
     'model_deleted'
   )),
@@ -204,6 +206,7 @@ CREATE TABLE deployment_jobs (
 
   job_type TEXT NOT NULL CHECK (job_type IN (
     'deploy_model',
+    'update_model',
     'start_model',
     'stop_model',
     'scale_model',

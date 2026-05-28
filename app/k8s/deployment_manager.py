@@ -27,6 +27,10 @@ POD_FAILURE_REASONS = {
     "InvalidImageName",
     "RunContainerError",
 }
+POD_TERMINAL_FAILURE_REASONS = {
+    "Error",
+    "OOMKilled",
+}
 
 
 def apply_model_deployment(
@@ -241,6 +245,7 @@ def inspect_model_readiness(
         label_selector=build_model_label_selector(deployment["name"]),
     )
     failure_reason = first_pod_failure_reason(pods)
+    failure_code = classify_kubernetes_failure(failure_reason)
     available_replicas = int(value_at(k8s_deployment, "status.available_replicas") or 0)
     ready_pods = sum(1 for pod in pods if is_pod_ready(pod))
     scheduled_pods = sum(1 for pod in pods if is_pod_scheduled(pod))
@@ -257,6 +262,7 @@ def inspect_model_readiness(
             )
         ),
         "failed": failure_reason is not None,
+        "failure_code": failure_code,
         "reason": failure_reason,
         "deployment_available": deployment_available,
         "available_replicas": available_replicas,
@@ -359,7 +365,35 @@ def first_pod_failure_reason(pods: list[Any]) -> str | None:
             if reason in POD_FAILURE_REASONS:
                 detail = f": {message}" if message else ""
                 return f"Pod {pod_name} is waiting with {reason}{detail}"
+            terminated = value_at(status, "last_state.terminated")
+            terminated_reason = (
+                value_at(terminated, "reason") if terminated is not None else None
+            )
+            terminated_message = (
+                value_at(terminated, "message") if terminated is not None else None
+            )
+            if terminated_reason in POD_TERMINAL_FAILURE_REASONS:
+                detail = f": {terminated_message}" if terminated_message else ""
+                return f"Pod {pod_name} previously terminated with {terminated_reason}{detail}"
     return None
+
+
+def classify_kubernetes_failure(reason: str | None) -> str | None:
+    """Map Kubernetes failure text to stable API/worker categories."""
+    if reason is None:
+        return None
+    lowered = reason.lower()
+    if "imagepull" in lowered or "errimagepull" in lowered or "invalidimagename" in lowered:
+        return "image_pull"
+    if "oomkilled" in lowered or "insufficient memory" in lowered:
+        return "insufficient_memory"
+    if "insufficient" in lowered and "cpu" in lowered:
+        return "insufficient_cpu"
+    if "gpu" in lowered or "nvidia" in lowered or "cuda" in lowered:
+        return "gpu_unavailable"
+    if "hf_token" in lowered or "hugging face" in lowered or "401" in lowered or "403" in lowered:
+        return "model_download_auth"
+    return "pod_failure"
 
 
 def summarize_pods(pods: list[Any]) -> list[dict[str, Any]]:

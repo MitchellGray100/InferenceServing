@@ -116,6 +116,58 @@ def run_real_k8s_smoke_test(
         )
 
         verify_created_resources(namespace, deployment, expect_secret=has_hf_token())
+        update = client.request(
+            "PATCH",
+            f"/v1/projects/{project_id}/models/{model_deployment_id}",
+            token=token,
+            headers={"Idempotency-Key": f"update-{suffix}"},
+            json={
+                "replicas": 2,
+                "autoscaling": {
+                    "enabled": True,
+                    "min_replicas": 2,
+                    "max_replicas": 2,
+                    "target_cpu_utilization": 65,
+                },
+            },
+            expected_status=202,
+        )
+        deployment = update["modelDeployment"]
+        wait_for_deployment_job(
+            client,
+            project_id,
+            model_deployment_id,
+            update["deploymentJob"]["deploymentJobID"],
+            token,
+        )
+        verify_hpa_replicas(
+            namespace,
+            deployment["k8s_hpa_name"],
+            min_replicas=2,
+            max_replicas=2,
+        )
+        wait_for_ready_replicas(
+            namespace,
+            deployment["k8s_deployment_name"],
+            deployment["name"],
+            expected_replicas=2,
+        )
+
+        sync = client.request(
+            "POST",
+            f"/v1/projects/{project_id}/models/{model_deployment_id}/sync",
+            token=token,
+            headers={"Idempotency-Key": f"sync-{suffix}"},
+            expected_status=202,
+        )
+        wait_for_deployment_job(
+            client,
+            project_id,
+            model_deployment_id,
+            sync["deploymentJob"]["deploymentJobID"],
+            token,
+        )
+
         api_key_response = client.request(
             "POST",
             f"/v1/projects/{project_id}/api-keys",
@@ -207,6 +259,84 @@ def verify_deleted_resources(
     missing("hpa", deployment["k8s_hpa_name"], namespace)
     if expect_secret:
         missing("secret", f"{deployment['name']}-secrets", namespace)
+
+
+def verify_hpa_replicas(
+    namespace: str,
+    hpa_name: str,
+    *,
+    min_replicas: int,
+    max_replicas: int,
+) -> None:
+    """Assert the HPA was reapplied with expected replica bounds."""
+    result = run_kubectl(
+        [
+            "get",
+            "hpa",
+            hpa_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.spec.minReplicas},{.spec.maxReplicas}",
+        ]
+    )
+    actual = result.stdout.strip()
+    expected = f"{min_replicas},{max_replicas}"
+    if actual != expected:
+        raise RuntimeError(f"Expected HPA replicas {expected}, got {actual}.")
+    print(f"OK kubectl hpa/{hpa_name} replicas {actual}")
+
+
+def wait_for_ready_replicas(
+    namespace: str,
+    deployment_name: str,
+    model_name: str,
+    *,
+    expected_replicas: int,
+    attempts: int = 60,
+) -> None:
+    """Wait until Kubernetes reports the expected ready Deployment/pod count."""
+    for _ in range(attempts):
+        ready_replicas = kubectl_jsonpath(
+            [
+                "get",
+                "deployment",
+                deployment_name,
+                "-n",
+                namespace,
+                "-o",
+                "jsonpath={.status.readyReplicas}",
+            ]
+        )
+        ready_pods = kubectl_jsonpath(
+            [
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-l",
+                f"miniten.io/model={model_name}",
+                "-o",
+                (
+                    "jsonpath={range .items[?(@.status.containerStatuses[0].ready==true)]}"
+                    "{.metadata.name}{'\\n'}{end}"
+                ),
+            ]
+        )
+        ready_pod_count = len([line for line in ready_pods.splitlines() if line.strip()])
+        if int(ready_replicas or "0") == expected_replicas and ready_pod_count == expected_replicas:
+            print(f"OK kubectl deployment/{deployment_name} ready replicas {expected_replicas}")
+            return
+        time.sleep(1)
+    raise RuntimeError(
+        "Timed out waiting for ready replicas "
+        f"deployment={deployment_name} expected={expected_replicas}"
+    )
+
+
+def kubectl_jsonpath(args: list[str]) -> str:
+    """Run kubectl jsonpath and return stripped stdout."""
+    return run_kubectl(args).stdout.strip()
 
 
 def verify_kubectl_available() -> None:

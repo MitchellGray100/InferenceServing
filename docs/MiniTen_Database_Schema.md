@@ -553,7 +553,9 @@ CREATE TABLE model_events (
     'model_running',
     'model_stopped',
     'model_started',
+    'model_updated',
     'model_scaled',
+    'model_status_synced',
     'model_failed',
     'model_deleted'
   )),
@@ -592,7 +594,9 @@ model_loading
 model_running
 model_stopped
 model_started
+model_updated
 model_scaled
+model_status_synced
 model_failed
 model_deleted
 ```
@@ -916,6 +920,7 @@ CREATE TABLE deployment_jobs (
 
   job_type TEXT NOT NULL CHECK (job_type IN (
     'deploy_model',
+    'update_model',
     'start_model',
     'stop_model',
     'scale_model',
@@ -960,7 +965,7 @@ CREATE TABLE deployment_jobs (
 | `payload` | `JSONB` | Yes | Operation-specific details needed by the worker. |
 | `attempts` | `INTEGER` | Yes | Number of times the worker has attempted the job. |
 | `max_attempts` | `INTEGER` | Yes | Maximum attempts before marking the job failed. |
-| `last_error` | `TEXT` | No | Most recent error message if the job failed or is retrying. |
+| `last_error` | `TEXT` | No | Most recent category-prefixed error if the job failed or is retrying. |
 | `locked_by` | `TEXT` | No | Worker instance currently processing the job. |
 | `locked_at` | `TIMESTAMP` | No | Time the job was locked by a worker. |
 | `created_at` | `TIMESTAMP` | Yes | Time the job was created. |
@@ -972,6 +977,7 @@ Allowed job types:
 
 ```text
 deploy_model
+update_model
 start_model
 stop_model
 scale_model
@@ -982,11 +988,32 @@ sync_status
 | Job Type | Meaning |
 |---|---|
 | `deploy_model` | Create Kubernetes resources for a model deployment. |
+| `update_model` | Reapply Kubernetes resources after settings changes. |
 | `start_model` | Scale a stopped deployment back up. |
 | `stop_model` | Scale a deployment down to zero. |
 | `scale_model` | Change replica count or autoscaling settings. |
 | `delete_model` | Delete Kubernetes resources and mark the deployment deleted. |
 | `sync_status` | Reconcile MiniTen metadata with live Kubernetes state. |
+
+## Failure Categories
+
+The worker stores user-actionable failure categories in model event metadata and
+prefixes `deployment_jobs.last_error` with the category. MVP categories are:
+
+```text
+image_pull
+insufficient_memory
+insufficient_cpu
+gpu_unavailable
+model_download_auth
+invalid_model_or_chat_template
+readiness_timeout
+pod_failure
+unknown
+```
+
+These categories make dashboard and CLI status views easier to explain without
+requiring users to parse raw Kubernetes events first.
 
 ## Status Values
 
@@ -1546,7 +1573,9 @@ CREATE TABLE model_events (
     'model_running',
     'model_stopped',
     'model_started',
+    'model_updated',
     'model_scaled',
+    'model_status_synced',
     'model_failed',
     'model_deleted'
   )),
@@ -1588,6 +1617,7 @@ CREATE TABLE deployment_jobs (
 
   job_type TEXT NOT NULL CHECK (job_type IN (
     'deploy_model',
+    'update_model',
     'start_model',
     'stop_model',
     'scale_model',

@@ -714,6 +714,8 @@ Common development commands:
 make install
 make setup-env
 make clean-env
+make clean-kind
+make clean-all
 make migrate
 make run-api
 make run-worker
@@ -734,7 +736,10 @@ creates or reuses a local `kind` cluster named `miniten`, writes a Docker
 Compose kubeconfig to `.local/kube/config`, and starts the local Deployment
 Worker in dry-run mode.
 `make clean-env` stops Compose services, removes the local Postgres volume,
-deletes the `kind` cluster, and removes the local setup marker.
+and removes the local setup marker while preserving the `kind` cluster and its
+cached pod images. Use `make clean-kind` only when you intentionally want to
+delete the local `kind` cluster. Use `make clean-all` for a full reset of both
+Compose state and the `kind` cluster.
 `make test-local-apis` runs HTTP smoke tests against a running local API, so
 start `make run-api` in another terminal first. The smoke test waits for
 `GET /readyz` before exercising authenticated endpoints, then verifies queued
@@ -829,7 +834,9 @@ memory limit than the fast smoke test because CPU vLLM has meaningful startup
 overhead. Model pods use
 `imagePullPolicy: IfNotPresent`; kind stores those pod images inside the kind
 node container's containerd image store, so they may not appear as ordinary host
-Docker images in Docker Desktop.
+Docker images in Docker Desktop. `make clean-env` intentionally keeps that kind
+node image cache so large images such as vLLM are not redownloaded during normal
+local resets. `make clean-kind` and `make clean-all` delete that cache.
 
 When Flask runs locally with `API_DEBUG=true`, inference routing uses
 `INFERENCE_LOCAL_PORT_FORWARD_URL` and the smoke test opens a temporary

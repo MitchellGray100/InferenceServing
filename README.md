@@ -3,34 +3,60 @@
 <img width="1112" height="362" alt="image" src="https://github.com/user-attachments/assets/8e06f9a5-c1fb-4f04-98ef-d271c724a9b8" />
 <img width="2211" height="1171" alt="image" src="https://github.com/user-attachments/assets/f6f7ab21-b39f-49b1-9acb-072912177f96" />
 
-MiniTen is an OCI-hosted, multi-user inference serving platform for deploying open-source Hugging Face LLMs as vLLM workers on Oracle Kubernetes Engine.
+MiniTen is a planned multi-user inference serving platform for deploying open-source Hugging Face LLMs as named vLLM workers on Kubernetes.
 
-It provides a Baseten-inspired workflow for deploying named model services, managing their lifecycle, and calling them from application code through OpenAI-compatible HTTP APIs.
+The project is designed to run locally first with `kind` or `minikube`, then later on Oracle Cloud Infrastructure using Oracle Kubernetes Engine.
 
-The core product loop is:
+MiniTen provides a Baseten-inspired workflow for:
 
 ```text
-log in → create/select project → deploy named model → call model through API → inspect/start/stop/scale deployment
+create account
+  ↓
+create/select project
+  ↓
+deploy named model
+  ↓
+manage model lifecycle
+  ↓
+call model through OpenAI-compatible HTTP APIs
 ```
 
 ---
 
-## Features
+## Project Status
 
-- Multi-user authentication
+MiniTen is currently a design-stage / MVP-build project.
+
+The repository documents the planned:
+
+- API surface
+- database schema
+- system design
+- Kubernetes resource model
+- deployment and inference data flows
+
+Implementation should start with the Flask backend, Postgres schema/migrations, and local development setup before moving to Kubernetes and OKE.
+
+---
+
+## MVP Goals
+
+MiniTen's MVP focuses on:
+
+- User account creation and login
+- Project-based isolation
+- Project membership and roles
 - Project-scoped API keys
-- Named model deployments per project
-- Open-source Hugging Face LLM deployment with vLLM
-- Kubernetes Deployment, Service, PVC, and HPA orchestration
+- Named model deployments
+- Hugging Face model IDs passed to vLLM
+- Kubernetes-managed vLLM workers
+- OpenAI-compatible inference endpoints
+- Lightweight analytics and lifecycle events
 - PVC-backed Hugging Face model cache
-- Readiness and health checks
-- Start, stop, inspect, scale, and delete model deployments
-- HPA-based autoscaling with configurable min/max replicas
-- Postgres-backed deployment job queue for async lifecycle operations
-- Idempotency keys for retried control-plane requests
-- Structured logging and deployment metadata tracking
-- Lightweight inference request analytics
-- OpenAI-compatible `/v1/chat/completions` API
+- Postgres-backed deployment jobs
+- Idempotency keys for retried control-plane operations
+
+MiniTen does not run model inference inside Flask. Flask manages metadata, authentication, project access, Kubernetes orchestration, and inference routing. vLLM workers perform the actual inference.
 
 ---
 
@@ -48,9 +74,9 @@ log in → create/select project → deploy named model → call model through A
 ### Database
 
 - Postgres
-- SQL schema managed through explicit migration files
-- Postgres-backed deployment jobs table
-- Postgres-backed idempotency keys table
+- Explicit SQL schema files
+- `deployment_jobs` table for asynchronous lifecycle work
+- `idempotency_keys` table for retry-safe control-plane operations
 
 ### Frontend / Dashboard
 
@@ -58,76 +84,237 @@ log in → create/select project → deploy named model → call model through A
 - CSS
 - JavaScript
 - Flask templates
-- Static assets served by Flask
+- Static files served by Flask
 
 ### Model Serving
 
 - vLLM
 - Hugging Face model IDs
 - Kubernetes-managed vLLM worker pods
-- PVC-mounted Hugging Face model cache
+- PVC-mounted Hugging Face cache
 
-### Infrastructure
+### Local Infrastructure
 
 - Docker
-- Docker Compose for local Postgres
-- kind or minikube for local Kubernetes development
-- Oracle Kubernetes Engine later
-- OCI Load Balancer later
-- OCI Container Registry later, optional
+- Docker Compose for Postgres
+- kind or minikube for local Kubernetes
+
+### Future Cloud Target
+
+- Oracle Cloud Infrastructure
+- Oracle Kubernetes Engine
+- OCI Load Balancer
+- OCI Container Registry, optional
 
 ---
 
-## System Overview
+## API Overview
 
-MiniTen separates the platform into a control plane and a data plane.
-
-### Control Plane
-
-The control plane manages users, projects, API keys, deployment metadata, and Kubernetes resources.
-
-Control-plane operations include:
+All public API endpoints are versioned under:
 
 ```text
-sign up
-log in
+/v1
+```
+
+MiniTen has these API groups:
+
+| API Group | Purpose |
+|---|---|
+| Users API | Create, read, and delete user accounts |
+| Auth API | Login/logout and token creation |
+| Projects API | Create, list, inspect, and delete projects |
+| Project Members API | Manage users inside a project |
+| Project API Keys API | Create/revoke project-scoped inference API keys |
+| Model Deployment API | Deploy, inspect, update, start, stop, delete, and log models |
+| Analytics API | View usage metrics, request history, and lifecycle events |
+| Inference API | Call deployed models through OpenAI-compatible endpoints |
+
+---
+
+## Authentication Model
+
+MiniTen uses two authentication modes.
+
+### User Auth Token
+
+Used for dashboard and control-plane operations.
+
+```http
+Authorization: Bearer <user_access_token>
+```
+
+Used for:
+
+```text
 create project
+manage members
 create API key
 deploy model
-start model
-stop model
-scale model
-delete model
-inspect logs/status
+start/stop model
+view analytics
 ```
 
-Slow lifecycle operations are written to a Postgres-backed `deployment_jobs` table and processed asynchronously by a Deployment Worker/Reconciler.
+### Project API Key
 
-### Data Plane
+Used by external applications for inference.
 
-The data plane handles inference traffic.
+```http
+Authorization: Bearer <project_api_key>
+```
 
-Inference requests are synchronous and OpenAI-compatible:
+Used for:
 
 ```text
-Client application
-  ↓
 POST /v1/chat/completions
-  ↓
-MiniTen inference service
-  ↓
-Kubernetes Service for selected model
-  ↓
-vLLM worker pod
-  ↓
-response
+GET /v1/models
 ```
 
-Chat/inference requests do not use the deployment job queue in the MVP because clients expect an immediate or streaming response.
+The project API key determines the project. The `model` field in the request body determines which named deployment inside that project receives the request.
 
 ---
 
-## Architecture
+## Deployment Identity
+
+All model operations use the project-local deployment name.
+
+Example deployment name:
+
+```text
+qwen-small-prod
+```
+
+The Hugging Face model ID is stored separately as metadata:
+
+```text
+Qwen/Qwen2.5-0.5B-Instruct
+```
+
+The OpenAI-compatible request uses the MiniTen deployment name:
+
+```json
+{
+  "model": "qwen-small-prod",
+  "messages": []
+}
+```
+
+This means the same Hugging Face model can be deployed multiple times in the same project under different names:
+
+```text
+qwen-small-dev
+qwen-small-prod
+qwen-small-gpu
+```
+
+Deployment names must be unique within a project.
+
+Recommended model name format:
+
+```text
+lowercase letters
+numbers
+hyphens
+must start and end with an alphanumeric character
+```
+
+---
+
+## Core API Examples
+
+### Create User
+
+```http
+POST /v1/users
+```
+
+```json
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+```
+
+### Login
+
+```http
+POST /v1/auth/login
+```
+
+```json
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+```
+
+### Create Project
+
+```http
+POST /v1/projects
+Authorization: Bearer <user_access_token>
+```
+
+```json
+{
+  "name": "Personal Models"
+}
+```
+
+### Deploy Model
+
+```http
+POST /v1/projects/{projectID}/models
+Authorization: Bearer <user_access_token>
+```
+
+```json
+{
+  "name": "qwen-small-prod",
+  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "resources": {
+    "cpu_request": "2",
+    "cpu_limit": "4",
+    "memory_request": "8Gi",
+    "memory_limit": "16Gi",
+    "gpu_count": 0
+  },
+  "vllm": {
+    "image": "vllm/vllm-openai:latest",
+    "dtype": "auto",
+    "max_model_len": 4096
+  },
+  "autoscaling": {
+    "enabled": true,
+    "min_replicas": 1,
+    "max_replicas": 3,
+    "target_cpu_utilization": 70
+  }
+}
+```
+
+### Call Model
+
+```http
+POST /v1/chat/completions
+Authorization: Bearer <project_api_key>
+```
+
+```json
+{
+  "model": "qwen-small-prod",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain Kubernetes in one sentence."
+    }
+  ],
+  "max_tokens": 128
+}
+```
+
+---
+
+## System Architecture
 
 ```text
 External User / Developer App
@@ -139,7 +326,9 @@ OCI Load Balancer, or localhost during local development
 Flask API / Dashboard
         |
         +--> Auth routes
+        +--> User routes
         +--> Project routes
+        +--> Project member routes
         +--> API key routes
         +--> Model deployment routes
         +--> Analytics routes
@@ -152,171 +341,119 @@ Flask API / Dashboard
                   v
           OKE / kind / minikube cluster
                   |
-                  +--> Kubernetes Namespace per project
+                  +--> Namespace per project
                   +--> Deployment per model version
                   +--> Service per named model deployment
                   +--> PVC per model deployment cache
                   +--> HPA per autoscaled deployment
+                  +--> Secret per deployment, optional
                   +--> vLLM worker pods
 ```
 
-For a deployed model, inference traffic flows through the Kubernetes Service, not directly to pod IPs:
+MiniTen has two conceptual planes:
 
 ```text
-Inference Service
+Control plane = user/project/deployment management
+Data plane    = inference routing to vLLM workers
+```
+
+---
+
+## Control Plane
+
+The control plane manages platform metadata and Kubernetes lifecycle operations.
+
+Examples:
+
+```text
+sign up
+log in
+create project
+create API key
+deploy model
+start model
+stop model
+scale model
+delete model
+view analytics
+```
+
+Control-plane state is stored in Postgres.
+
+Slow lifecycle work is stored in the `deployment_jobs` table and processed by a background Deployment Worker/Reconciler.
+
+---
+
+## Data Plane
+
+The data plane handles inference traffic.
+
+Inference requests are synchronous and are not placed in the deployment job queue.
+
+```text
+External app
   ↓
-K8s Service/qwen-small-prod
+POST /v1/chat/completions
   ↓
-vLLM Worker Pod(s)
+Flask inference route
+  ↓
+Validate project API key
+  ↓
+Resolve API key to project
+  ↓
+Read request.body.model as deployment name
+  ↓
+Find model_deployments row by project_id + name
+  ↓
+Check model is running
+  ↓
+Forward request to Kubernetes Service
+  ↓
+vLLM worker returns response
+  ↓
+Write inference_requests metadata
 ```
+
+Inference does not go to Hugging Face and does not read the PVC directly. vLLM has already loaded the model into memory.
 
 ---
 
-## Deployment Identity
+## Kubernetes Resource Model
 
-Users interact with models by their project-local deployment name.
-
-Example config:
-
-```yaml
-name: qwen-small-prod
-model: Qwen/Qwen2.5-0.5B-Instruct
-engine: vllm
-
-resources:
-  cpu: "2"
-  memory: "8Gi"
-  gpu: 0
-
-autoscaling:
-  enabled: true
-  min_replicas: 1
-  max_replicas: 3
-  target_cpu_utilization: 70
-
-vllm:
-  dtype: auto
-  max_model_len: 4096
-```
-
-The `name` field is the API-facing identifier.
-
-The Hugging Face `model` ID is implementation metadata passed to vLLM.
-
-Users call the deployment by name:
-
-```json
-{
-  "model": "qwen-small-prod",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Explain Kubernetes in one sentence."
-    }
-  ]
-}
-```
-
-This allows the same Hugging Face model to be deployed multiple times in one project under different names:
+For each project:
 
 ```text
-qwen-small-dev
-qwen-small-prod
-qwen-small-gpu
+Project: personal
+Namespace: miniten-personal
 ```
 
-Deployment names are unique within a project.
-
----
-
-## Example Usage
-
-Deploy a model:
-
-```bash
-miniten models deploy Qwen/Qwen2.5-0.5B-Instruct \
-  --name qwen-small-prod \
-  --cpu 2 \
-  --memory 8Gi \
-  --gpu 0
-```
-
-List deployed models:
-
-```bash
-miniten models list
-```
-
-Inspect a model:
-
-```bash
-miniten models inspect qwen-small-prod
-```
-
-Stop a model:
-
-```bash
-miniten models stop qwen-small-prod
-```
-
-Start a model:
-
-```bash
-miniten models start qwen-small-prod
-```
-
-Scale a model:
-
-```bash
-miniten models scale qwen-small-prod --replicas 3
-```
-
-Create an API key:
-
-```bash
-miniten api-keys create --name local-dev
-```
-
-Call a deployed model from Python:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="https://api.miniten.dev/v1",
-    api_key="mt_live_xxx",
-)
-
-response = client.chat.completions.create(
-    model="qwen-small-prod",
-    messages=[
-        {"role": "user", "content": "Explain Kubernetes in one sentence."}
-    ],
-)
-
-print(response.choices[0].message.content)
-```
-
----
-
-## Kubernetes Resources
-
-For a deployment named `qwen-small-prod`, MiniTen creates resources such as:
+For each model deployment:
 
 ```text
-Namespace:   miniten-personal
-Deployment:  qwen-small-prod-v1
-Service:     qwen-small-prod
-PVC:         qwen-small-prod-hf-cache
-HPA:         qwen-small-prod-v1
-Secret:      qwen-small-prod-secrets, optional
+Deployment name: qwen-small-prod
+Model ID: Qwen/Qwen2.5-0.5B-Instruct
+Version: v1
 ```
 
-The inference service forwards traffic to the internal Kubernetes Service:
+MiniTen creates:
 
 ```text
-http://qwen-small-prod.miniten-personal.svc.cluster.local:8000/v1/chat/completions
+Deployment/qwen-small-prod-v1
+Service/qwen-small-prod
+PVC/qwen-small-prod-hf-cache
+HPA/qwen-small-prod-v1, optional
+Secret/qwen-small-prod-secrets, optional
 ```
+
+The Deployment runs vLLM.
+
+The Service gives the model a stable internal endpoint.
+
+The PVC caches Hugging Face model files.
+
+The HPA controls autoscaling when enabled.
+
+The Secret can provide private model credentials such as a Hugging Face token.
 
 ---
 
@@ -330,75 +467,114 @@ Each vLLM worker mounts a Kubernetes PVC at:
 /root/.cache/huggingface
 ```
 
-Startup flow:
+First startup / cache miss:
 
 ```text
 vLLM worker pod starts
   ↓
 PVC is mounted at /root/.cache/huggingface
   ↓
-vLLM checks local Hugging Face cache
+vLLM asks Hugging Face libraries for model files
   ↓
-if cache hit: load model files from PVC
+Local cache is empty
   ↓
-if cache miss: download model files from Hugging Face into PVC
+vLLM downloads model files from Hugging Face
   ↓
-load weights into CPU/GPU memory
+Downloaded files are written directly into the PVC-mounted cache path
   ↓
-pod becomes ready
+vLLM loads model weights into CPU/GPU memory
+  ↓
+Readiness probe passes
 ```
 
-The PVC is passive storage. The vLLM worker reads and writes the model cache.
+Restart / cache hit:
 
-Inference requests do not go to Hugging Face. Hugging Face is only used during startup/cache miss.
+```text
+vLLM worker pod restarts
+  ↓
+Same PVC is mounted
+  ↓
+Model files are present
+  ↓
+vLLM loads model from PVC into memory
+  ↓
+Pod becomes ready
+```
 
-Future work may add OCI Object Storage as a durable cross-cluster model cache.
+Hugging Face is only used on startup/cache miss. It is not used during normal inference.
 
 ---
 
 ## Autoscaling
 
-MiniTen supports Kubernetes HPA-based autoscaling.
+MiniTen supports Kubernetes HPA-based autoscaling in the MVP design.
 
-Example config:
+Example autoscaling config:
 
-```yaml
-autoscaling:
-  enabled: true
-  min_replicas: 1
-  max_replicas: 3
-  target_cpu_utilization: 70
+```json
+{
+  "enabled": true,
+  "min_replicas": 1,
+  "max_replicas": 3,
+  "target_cpu_utilization": 70
+}
 ```
 
-MiniTen translates this into a Kubernetes `HorizontalPodAutoscaler` for the model deployment.
+Autoscaling flow:
 
-HPA adjusts the number of vLLM worker pods between the configured replica limits.
+```text
+Traffic increases
+  ↓
+CPU utilization rises
+  ↓
+HPA observes metrics
+  ↓
+HPA increases replica count
+  ↓
+Deployment creates more vLLM pods
+  ↓
+New pods mount PVC cache
+  ↓
+Pods load model
+  ↓
+Kubernetes Service load-balances traffic across ready pods
+```
 
-For the MVP, autoscaling uses CPU utilization. Future versions may use vLLM metrics, queue depth, in-flight requests, latency, or GPU utilization through Prometheus/KEDA.
+PVC sharing across replicas may require a compatible storage access mode such as `ReadWriteMany`.
 
 ---
 
-## API Keys
+## Database
 
-Users create project-scoped API keys for inference access.
+Postgres stores application metadata.
 
-Example:
+Core tables:
 
 ```text
-mt_live_xxx
+users
+projects
+project_members
+model_deployments
+api_keys
+inference_requests
+model_events
+idempotency_keys
+deployment_jobs
 ```
 
-The API key determines the project. The `model` field in the request determines which named deployment inside that project receives the request.
+Postgres does not store model weights, prompts, or model responses.
 
-API keys are stored as hashes. Raw API keys are shown only once.
+Model weights live on Hugging Face and are cached in Kubernetes PVCs.
+
+Kubernetes remains the source of truth for live pod and replica state.
 
 ---
 
 ## Deployment Jobs
 
-MiniTen uses a Postgres-backed job queue for slow model lifecycle operations.
+`deployment_jobs` stores asynchronous model lifecycle work.
 
-Job types include:
+Job types:
 
 ```text
 deploy_model
@@ -418,37 +594,30 @@ Flask route validates auth and project permissions
   ↓
 Model deployment metadata is written to Postgres
   ↓
-A deployment_jobs row is created
+deployment_jobs row is created
   ↓
 Deployment Worker claims the job
   ↓
 Deployment Worker calls Kubernetes API
   ↓
-Deployment Worker updates model status and writes events
+Deployment Worker updates model status
+  ↓
+Deployment Worker writes model_events
+  ↓
+Job is marked succeeded, retrying, or failed
 ```
 
-This keeps API requests fast and makes Kubernetes operations retryable.
+The job queue is for control-plane operations only.
 
-Normal chat requests do not use this queue.
+Normal chat/inference requests do not use this queue.
 
 ---
 
 ## Idempotency
 
-MiniTen supports idempotency keys for control-plane operations.
+`idempotency_keys` prevents duplicate side effects from retried control-plane requests.
 
-Example:
-
-```http
-POST /projects/proj_123/models
-Idempotency-Key: deploy-qwen-small-prod-001
-```
-
-If the same request is retried with the same idempotency key, MiniTen returns the original response instead of creating duplicate deployment jobs or Kubernetes resources.
-
-If the same idempotency key is reused with a different request body, MiniTen returns a conflict error.
-
-Idempotency is used for:
+Used for operations such as:
 
 ```text
 deploy model
@@ -459,39 +628,47 @@ delete model
 create API key
 ```
 
+Example:
+
+```http
+POST /v1/projects/{projectID}/models
+Idempotency-Key: deploy-qwen-small-prod-001
+```
+
+Retry behavior:
+
+```text
+same key + same request body    → return original response
+same key + different body       → return 409 Conflict
+```
+
 Idempotency is not used for normal inference requests in the MVP.
 
 ---
 
-## Database
+## Analytics
 
-Postgres stores MiniTen application metadata.
+MiniTen stores lightweight inference request metadata.
 
-Core tables include:
+The `inference_requests` table can support:
 
 ```text
-users
-projects
-project_members
-model_deployments
-api_keys
-inference_requests
-model_events
-idempotency_keys
-deployment_jobs
+request count
+error count
+average latency
+recent request history
+last request time
 ```
 
-Postgres stores metadata only.
+The MVP should not store prompts or model responses.
 
-It does not store model weights, prompts, or model responses.
-
-Model weights are stored by Hugging Face and cached in Kubernetes PVCs.
+Lifecycle events are stored in `model_events`.
 
 ---
 
 ## Local Development
 
-The stack can run locally before deploying to OCI.
+The system is designed to work locally before moving to OCI.
 
 Local equivalents:
 
@@ -501,10 +678,10 @@ OCI Load Balancer      → localhost / port-forward
 Postgres               → Docker Compose Postgres
 vLLM workers           → Kubernetes pods in kind/minikube
 PVC model cache        → local Kubernetes PVC
-Hugging Face Hub       → same public Hugging Face Hub
+Hugging Face Hub       → public Hugging Face Hub
 ```
 
-Example local setup:
+Example local workflow:
 
 ```bash
 docker compose up -d postgres
@@ -516,7 +693,9 @@ python -m app.services.deployment_worker
 
 ---
 
-## Repository Structure
+## Repository Shape
+
+Planned structure:
 
 ```text
 miniten/
@@ -529,39 +708,10 @@ miniten/
 ├── app/
 │   ├── __init__.py
 │   ├── config.py
-│   │
 │   ├── routes/
-│   │   ├── auth.py
-│   │   ├── users.py
-│   │   ├── projects.py
-│   │   ├── project_members.py
-│   │   ├── api_keys.py
-│   │   ├── model_deployments.py
-│   │   ├── inference.py
-│   │   ├── analytics.py
-│   │   └── dashboard.py
-│   │
 │   ├── services/
-│   │   ├── auth_service.py
-│   │   ├── project_service.py
-│   │   ├── api_key_service.py
-│   │   ├── model_deployment_service.py
-│   │   ├── inference_service.py
-│   │   ├── deployment_worker.py
-│   │   └── idempotency_service.py
-│   │
 │   ├── db/
-│   │   ├── pool.py
-│   │   ├── migrate.py
-│   │   ├── sql.py
-│   │   └── queries/
-│   │
 │   ├── k8s/
-│   │   ├── client.py
-│   │   ├── names.py
-│   │   ├── manifests.py
-│   │   └── deployment_manager.py
-│   │
 │   ├── templates/
 │   └── static/
 │
@@ -574,41 +724,3 @@ miniten/
 
 ---
 
-## MVP Scope
-
-The MVP includes:
-
-- Email/password authentication
-- Projects and project memberships
-- Project-scoped API keys
-- Named vLLM model deployments
-- Kubernetes Namespace, Deployment, Service, PVC, and HPA creation
-- PVC-backed Hugging Face cache
-- Start/stop/scale/delete model lifecycle operations
-- Postgres-backed deployment jobs
-- Idempotency keys for control-plane retries
-- OpenAI-compatible synchronous inference routing
-- Basic request logging and analytics
-
-The MVP does not include:
-
-- Billing
-- Quotas
-- Kafka
-- Redis
-- Async chat jobs
-- Server-side chat memory
-- OAuth/SSO
-- Fine-tuning
-- Batch inference
-- OCI Object Storage model cache
-- Custom Docker model builds
-- Multi-node tensor parallelism
-- Advanced GPU scheduling
-- Prometheus/KEDA autoscaling
-
----
-
-## Status
-
-MiniTen is a personal infrastructure project focused on Kubernetes-based model serving, authentication, routing, lifecycle management, and autoscaling for open-source LLM inference.

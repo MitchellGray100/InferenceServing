@@ -701,31 +701,83 @@ python -m app.services.deployment_worker
 
 ## Repository Shape
 
-Planned structure:
+Current structure:
 
 ```text
-miniten/
-├── README.md
-├── .env.example
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-│
-├── app/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── routes/
-│   ├── services/
-│   ├── db/
-│   ├── k8s/
-│   ├── templates/
-│   └── static/
-│
-├── migrations/
-├── scripts/
-├── examples/
-├── docs/
-└── tests/
+README.md
+.env.example
+docker-compose.yml
+Dockerfile
+requirements.txt
+MiniTen_System_Design.md
+MiniTen_API_Endpoint_Design.md
+MiniTen_Database_Schema.md
+
+app/
+  __init__.py
+  config.py
+
+  routes/
+    auth.py
+    users.py
+    projects.py
+    project_members.py
+    api_keys.py
+    model_deployments.py
+    inference.py
+    analytics.py
+    dashboard.py
+
+  services/
+    auth_service.py
+    project_service.py
+    api_key_service.py
+    model_deployment_service.py
+    inference_service.py
+    deployment_worker.py
+    reconciler.py
+    idempotency_service.py
+
+  db/
+    pool.py
+    migrate.py
+    sql.py
+    queries/
+      users.sql
+      projects.sql
+      api_keys.sql
+      model_deployments.sql
+      deployment_jobs.sql
+      inference_requests.sql
+      model_events.sql
+      idempotency_keys.sql
+
+  k8s/
+    client.py
+    names.py
+    manifests.py
+    deployment_manager.py
+
+  security/
+    passwords.py
+    tokens.py
+    api_keys.py
+
+  utils/
+    errors.py
+    validation.py
+    time.py
+
+  templates/
+  static/
+
+migrations/
+  001_initial_schema.sql
+
+scripts/
+examples/
+docs/
+tests/
 ```
 
 ---

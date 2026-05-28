@@ -1,0 +1,1 @@
+-- Initial MiniTen schema migration.

@@ -198,6 +198,41 @@ app/routes/analytics.py
 app/routes/dashboard.py
 ```
 
+Recommended service modules:
+
+```text
+app/services/auth_service.py
+app/services/project_service.py
+app/services/api_key_service.py
+app/services/model_deployment_service.py
+app/services/inference_service.py
+app/services/deployment_worker.py
+app/services/reconciler.py
+app/services/idempotency_service.py
+```
+
+Recommended support modules:
+
+```text
+app/db/pool.py
+app/db/migrate.py
+app/db/sql.py
+app/db/queries/
+
+app/k8s/client.py
+app/k8s/names.py
+app/k8s/manifests.py
+app/k8s/deployment_manager.py
+
+app/security/passwords.py
+app/security/tokens.py
+app/security/api_keys.py
+
+app/utils/errors.py
+app/utils/validation.py
+app/utils/time.py
+```
+
 ---
 
 ## 5.2 Postgres
@@ -352,6 +387,13 @@ The Deployment Worker:
 - Updates `model_deployments`.
 - Writes `model_events`.
 - Retries failed jobs when appropriate.
+
+The Reconciler:
+
+- Periodically reads live Kubernetes Deployment, Pod, Service, and HPA state.
+- Compares Kubernetes state with `model_deployments`.
+- Corrects stale product statuses such as `deploying`, `loading`, `running`, `stopped`, and `failed`.
+- Can enqueue or process `sync_status` work when a deployment needs explicit reconciliation.
 
 ---
 

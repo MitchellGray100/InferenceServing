@@ -279,7 +279,6 @@ Authorization: Bearer <user_access_token>
     "gpu_count": 0
   },
   "vllm": {
-    "image": "vllm/vllm-openai:latest",
     "dtype": "auto",
     "max_model_len": 4096
   },
@@ -722,6 +721,7 @@ make run-worker-dry-run
 make start-worker-real-k8s
 make test-local-apis
 make test-local-k8s
+make test-local-vllm
 make lint
 make tests
 make compile
@@ -786,14 +786,55 @@ make test-local-k8s
 ```
 
 `make test-local-k8s` automatically switches the worker into real Kubernetes
-mode, deploys a lightweight smoke-test container, waits for the worker to
-verify Kubernetes readiness, checks Namespace/PVC/Deployment/Service/HPA
-creation, calls the model logs endpoint, deletes the model, and verifies
-runtime resources are removed. If `HUGGING_FACE_TOKEN` is set, the worker also
-creates and deletes the per-model Secret. This test intentionally avoids
-pulling the full `vllm/vllm-openai` image; production-like model loading can be
-tested separately by overriding `MINITEN_K8S_TEST_MODEL_ID` and
-`K8S_SMOKE_TEST_IMAGE`.
+mode, deploys a lightweight OpenAI-compatible smoke-test container, waits for
+the worker to verify Kubernetes readiness, checks
+Namespace/PVC/Deployment/Service/HPA creation, calls the model logs endpoint,
+creates a project API key, calls `/v1/chat/completions` through `kubectl
+port-forward`, verifies analytics/request history includes the inference call,
+deletes the model, and verifies runtime resources are removed. If
+`HUGGING_FACE_TOKEN` is set, the worker also creates and deletes the per-model
+Secret. This test intentionally avoids pulling the full `vllm/vllm-openai`
+image.
+
+Real local vLLM smoke workflow:
+
+```bash
+make setup-env
+make run-api
+make test-local-vllm
+```
+
+`make test-local-vllm` deploys an actual vLLM container, waits for it to load a
+small Hugging Face model, calls `/v1/chat/completions`, verifies analytics
+metadata, then deletes the deployment. This test is intentionally separate from
+`make test-local-k8s` because it can take much longer and may fail for local
+machine reasons such as image pull issues, CPU-only vLLM support, model
+download/authentication problems, memory pressure, or readiness timeouts. Tune
+the model and resources with `MINITEN_VLLM_TEST_MODEL_ID` and the
+`MINITEN_VLLM_TEST_*` settings in `.env.example`. MiniTen owns vLLM image
+selection, so clients do not submit custom images. The local vLLM smoke command
+defaults to `vllm/vllm-openai-cpu:latest-x86_64` and
+`MINITEN_VLLM_TEST_DEVICE=cpu` so Docker Desktop/kind can run without GPUs. It
+uses a small instruct model by default because `/v1/chat/completions` requires a
+tokenizer with a chat template. GPU
+testing should use the normal `vllm/vllm-openai` image, set
+`MINITEN_VLLM_TEST_DEVICE=cuda`, and request GPUs only after the local cluster
+exposes an NVIDIA device plugin. MiniTen passes that device value as
+`VLLM_TARGET_DEVICE`, because vLLM reads the environment variable while
+constructing CLI defaults and the CPU image does not accept a `--device` CLI flag.
+CPU deployments also pass MiniTen's internal `VLLM_CPU_MEMORY_UTILIZATION`
+setting to keep vLLM's CPU KV-cache reservation below Docker Desktop/kind node
+memory. The local vLLM smoke test also uses a short context length and a larger
+memory limit than the fast smoke test because CPU vLLM has meaningful startup
+overhead. Model pods use
+`imagePullPolicy: IfNotPresent`; kind stores those pod images inside the kind
+node container's containerd image store, so they may not appear as ordinary host
+Docker images in Docker Desktop.
+
+When Flask runs locally with `API_DEBUG=true`, inference routing uses
+`INFERENCE_LOCAL_PORT_FORWARD_URL` and the smoke test opens a temporary
+`kubectl port-forward` to the Kubernetes Service. In production-style API
+containers, inference uses Kubernetes Service DNS directly.
 
 Logging is controlled with `LOG_LEVEL`, defaulting to `INFO`. Use `DEBUG` when
 you need lower-level SQL/Kubernetes/auth diagnostics. Logs intentionally avoid

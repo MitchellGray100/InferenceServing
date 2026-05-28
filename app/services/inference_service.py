@@ -212,6 +212,13 @@ def ensure_deployment_running(deployment: dict[str, Any]) -> None:
 
 def build_vllm_url(deployment: dict[str, Any], path: str) -> str:
     """Build the in-cluster URL for a deployment's vLLM Service."""
+    local_base_url = current_app.config.get("INFERENCE_LOCAL_PORT_FORWARD_URL")
+    if not local_base_url and current_app.config.get("API_DEBUG"):
+        local_base_url = "http://127.0.0.1:18080"
+    if local_base_url:
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        return f"{local_base_url.rstrip('/')}{normalized_path}"
+
     # Kubernetes DNS lets pods call Services by
     # service.namespace.svc.cluster.local inside the cluster.
     service_name = deployment["k8s_service_name"]

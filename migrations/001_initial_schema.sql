@@ -78,7 +78,7 @@ CREATE TABLE model_deployments (
   memory_limit TEXT,
   gpu_count INTEGER NOT NULL DEFAULT 0,
 
-  vllm_image TEXT NOT NULL DEFAULT 'vllm/vllm-openai:latest',
+  vllm_image TEXT NOT NULL DEFAULT 'vllm/vllm-openai-cpu:latest-x86_64',
   vllm_dtype TEXT NOT NULL DEFAULT 'auto',
   vllm_max_model_len INTEGER NOT NULL DEFAULT 4096,
 

@@ -27,12 +27,16 @@ USER_ID = "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"
 
 class TestConfig:
     TESTING = True
+    API_DEBUG = True
     SECRET_KEY = "test-secret-key-change-me-32-bytes"
     DEFAULT_MODEL_REPLICAS = 1
     DEFAULT_HPA_MIN_REPLICAS = 1
     DEFAULT_HPA_MAX_REPLICAS = 3
     DEFAULT_HPA_TARGET_CPU_UTILIZATION = 70
     VLLM_IMAGE = "vllm/vllm-openai:latest"
+    VLLM_CPU_IMAGE = "vllm/vllm-openai-cpu:latest-x86_64"
+    K8S_SMOKE_TEST_IMAGE = "python:3.12-alpine"
+    K8S_SMOKE_TEST_MODEL_ID = "miniten/smoke-openai-compatible"
 
 
 @pytest.fixture
@@ -355,8 +359,49 @@ def test_validate_deployment_spec_applies_defaults(app) -> None:
     assert spec["replicas"] == 1
     assert spec["cpu_request"] == "1"
     assert spec["memory_limit"] == "8Gi"
+    assert spec["vllm_image"] == "vllm/vllm-openai-cpu:latest-x86_64"
     assert spec["autoscaling_enabled"] is False
     assert spec["min_replicas"] is None
+
+
+def test_validate_deployment_spec_uses_gpu_image_when_gpu_requested(app) -> None:
+    with app.app_context():
+        spec = validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "resources": {"gpu_count": 1},
+            }
+        )
+
+    assert spec["gpu_count"] == 1
+    assert spec["vllm_image"] == "vllm/vllm-openai:latest"
+
+
+def test_validate_deployment_spec_rejects_client_vllm_image(app) -> None:
+    with app.app_context(), pytest.raises(ApiError) as error:
+        validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "vllm": {"image": "example/custom:latest"},
+            }
+        )
+
+    assert error.value.type == "validation_error"
+    assert "managed by MiniTen" in error.value.message
+
+
+def test_validate_deployment_spec_uses_debug_smoke_image(app) -> None:
+    with app.app_context():
+        spec = validate_deployment_spec(
+            {
+                "name": "smoke",
+                "model_id": "miniten/smoke-openai-compatible",
+            }
+        )
+
+    assert spec["vllm_image"] == "python:3.12-alpine"
 
 
 def test_validate_deployment_spec_rejects_bad_autoscaling(app) -> None:

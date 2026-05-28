@@ -1252,7 +1252,6 @@ owner, member
     "gpu_count": 0
   },
   "vllm": {
-    "image": "vllm/vllm-openai:latest",
     "dtype": "auto",
     "max_model_len": 4096
   },
@@ -1432,7 +1431,6 @@ owner, member, viewer
     "gpu_count": 0
   },
   "vllm": {
-    "image": "vllm/vllm-openai:latest",
     "dtype": "auto",
     "max_model_len": 4096
   },

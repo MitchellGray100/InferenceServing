@@ -11,6 +11,7 @@ This script assumes:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import subprocess
 import sys
@@ -26,11 +27,17 @@ from smoke_test_local_api import (
 )
 
 
-DEFAULT_MODEL_ID = "facebook/opt-125m"
-DEFAULT_SMOKE_IMAGE = "hashicorp/http-echo:1.0"
+DEFAULT_MODEL_ID = "miniten/smoke-openai-compatible"
+DEFAULT_SMOKE_IMAGE = "python:3.12-alpine"
+DEFAULT_PORT_FORWARD_PORT = 18080
 
 
-def run_real_k8s_smoke_test(base_url: str, model_id: str, smoke_image: str) -> None:
+def run_real_k8s_smoke_test(
+    base_url: str,
+    model_id: str,
+    smoke_image: str,
+    port_forward_port: int,
+) -> None:
     """Create, verify, and delete one real Kubernetes-backed model deployment."""
     client = SmokeClient(base_url)
     suffix = uuid.uuid4().hex[:8]
@@ -85,7 +92,6 @@ def run_real_k8s_smoke_test(base_url: str, model_id: str, smoke_image: str) -> N
                     "gpu_count": 0,
                 },
                 "vllm": {
-                    "image": smoke_image,
                     "dtype": "auto",
                     "max_model_len": 128,
                 },
@@ -110,11 +116,48 @@ def run_real_k8s_smoke_test(base_url: str, model_id: str, smoke_image: str) -> N
         )
 
         verify_created_resources(namespace, deployment, expect_secret=has_hf_token())
+        api_key_response = client.request(
+            "POST",
+            f"/v1/projects/{project_id}/api-keys",
+            token=token,
+            json={"name": f"K8s Smoke Key {suffix}"},
+            expected_status=201,
+        )
+        api_key = api_key_response["api_key"]
+
         client.request(
             "GET",
             f"/v1/projects/{project_id}/models/{model_name}/logs?tail=20",
             token=token,
         )
+        with port_forward(namespace, deployment["k8s_service_name"], port_forward_port):
+            infer = client.request(
+                "POST",
+                "/v1/chat/completions",
+                project_api_key=api_key,
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+            if infer["choices"][0]["message"]["content"] != "smoke ok":
+                raise RuntimeError(f"Unexpected inference response: {infer}")
+
+        metrics = client.request(
+            "GET",
+            f"/v1/projects/{project_id}/analytics/models/{model_name}/metrics",
+            token=token,
+        )
+        if metrics["metrics"]["request_count"] < 1:
+            raise RuntimeError("Expected analytics metrics to include smoke inference.")
+
+        requests_body = client.request(
+            "GET",
+            f"/v1/projects/{project_id}/analytics/models/{model_name}/requests",
+            token=token,
+        )
+        if not requests_body["requests"]:
+            raise RuntimeError("Expected analytics request history to include smoke inference.")
 
         delete = client.request(
             "DELETE",
@@ -170,6 +213,57 @@ def verify_kubectl_available() -> None:
     """Fail early when kubectl cannot reach the current cluster."""
     run_kubectl(["version", "--client=true"])
     run_kubectl(["cluster-info"])
+
+
+@contextlib.contextmanager
+def port_forward(namespace: str, service_name: str, local_port: int):
+    """Forward a Kubernetes Service to localhost for host-run Flask inference."""
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            "-n",
+            namespace,
+            f"service/{service_name}",
+            f"{local_port}:8000",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        wait_for_port_forward(process, local_port)
+        yield
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
+def wait_for_port_forward(process: subprocess.Popen, local_port: int) -> None:
+    """Wait for kubectl port-forward to begin accepting connections."""
+    for _ in range(30):
+        if process.poll() is not None:
+            output = process.stdout.read() if process.stdout else ""
+            raise RuntimeError(f"kubectl port-forward exited early: {output}")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import socket,sys;"
+                    f"s=socket.socket();s.settimeout(0.2);"
+                    f"sys.exit(0 if s.connect_ex(('127.0.0.1',{local_port}))==0 else 1)"
+                ),
+            ],
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        time.sleep(0.2)
+    raise RuntimeError("Timed out waiting for kubectl port-forward.")
 
 
 def get(kind: str, name: str, namespace: str | None = None) -> None:
@@ -285,6 +379,12 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("K8S_SMOKE_TEST_IMAGE", DEFAULT_SMOKE_IMAGE),
         help="Tiny image used for local Kubernetes readiness smoke tests.",
     )
+    parser.add_argument(
+        "--port-forward-port",
+        default=int(os.getenv("MINITEN_K8S_PORT_FORWARD_PORT", DEFAULT_PORT_FORWARD_PORT)),
+        type=int,
+        help="Local port used for Kubernetes Service port-forward during inference smoke.",
+    )
     return parser.parse_args()
 
 
@@ -292,7 +392,12 @@ def main() -> int:
     """CLI entrypoint."""
     args = parse_args()
     try:
-        run_real_k8s_smoke_test(args.base_url, args.model_id, args.smoke_image)
+        run_real_k8s_smoke_test(
+            args.base_url,
+            args.model_id,
+            args.smoke_image,
+            args.port_forward_port,
+        )
     except Exception as exc:
         print(f"Real Kubernetes smoke test failed: {exc}", file=sys.stderr)
         return 1

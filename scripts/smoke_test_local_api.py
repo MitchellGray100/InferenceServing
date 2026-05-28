@@ -326,11 +326,12 @@ def wait_for_deployment_job(
     deployment_job_id: str,
     token: str,
     expected_status: str = "succeeded",
+    max_attempts: int = 30,
 ) -> None:
     """Wait for the worker to process a deployment job."""
     last_status = None
 
-    for _ in range(30):
+    for _ in range(max_attempts):
         body = client.request(
             "GET",
             f"/v1/projects/{project_id}/models/{model_deployment_id}/jobs",

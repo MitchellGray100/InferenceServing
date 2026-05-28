@@ -32,6 +32,7 @@ NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
 class TestConfig:
     TESTING = True
+    API_DEBUG = True
     SECRET_KEY = "test-secret-key-change-me-32-bytes"
     API_KEY_HASH_SECRET = "test-api-key-hash-secret-change-me-32-bytes"
     DEFAULT_MODEL_REPLICAS = 1
@@ -39,6 +40,9 @@ class TestConfig:
     DEFAULT_HPA_MAX_REPLICAS = 3
     DEFAULT_HPA_TARGET_CPU_UTILIZATION = 70
     VLLM_IMAGE = "vllm/vllm-openai:latest"
+    VLLM_CPU_IMAGE = "vllm/vllm-openai-cpu:latest-x86_64"
+    K8S_SMOKE_TEST_IMAGE = "python:3.12-alpine"
+    K8S_SMOKE_TEST_MODEL_ID = "miniten/smoke-openai-compatible"
 
 
 @pytest.fixture

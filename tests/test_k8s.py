@@ -94,8 +94,11 @@ def test_build_deployment_manifest() -> None:
     assert manifest["kind"] == "Deployment"
     assert manifest["metadata"]["name"] == "qwen-small-prod-v1"
     assert manifest["spec"]["replicas"] == 1
+    assert container["imagePullPolicy"] == "IfNotPresent"
     assert "--model" in container["args"]
     assert "Qwen/Qwen2.5-0.5B-Instruct" in container["args"]
+    assert "--gpu-memory-utilization" in container["args"]
+    assert "0.25" in container["args"]
     assert container["ports"][0]["containerPort"] == VLLM_PORT
     assert container["volumeMounts"][0]["mountPath"] == HF_CACHE_MOUNT_PATH
     assert container["resources"]["requests"]["cpu"] == "2"
@@ -109,20 +112,33 @@ def test_build_deployment_manifest_with_gpu_and_secret() -> None:
     container = manifest["spec"]["template"]["spec"]["containers"][0]
 
     assert container["resources"]["limits"]["nvidia.com/gpu"] == 1
+    assert "--gpu-memory-utilization" not in container["args"]
     assert container["env"][-1]["valueFrom"]["secretKeyRef"]["name"] == (
         "qwen-small-prod-secrets"
     )
 
 
+def test_build_deployment_manifest_with_vllm_device(monkeypatch) -> None:
+    monkeypatch.setattr(Config, "VLLM_DEVICE", "cpu")
+    monkeypatch.setattr(Config, "VLLM_LOGGING_LEVEL", "DEBUG")
+
+    manifest = build_deployment_manifest(deployment_payload())
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+
+    assert "--device" not in container["args"]
+    assert {"name": "VLLM_TARGET_DEVICE", "value": "cpu"} in container["env"]
+    assert {"name": "VLLM_LOGGING_LEVEL", "value": "DEBUG"} in container["env"]
+
+
 def test_build_deployment_manifest_with_smoke_test_image(monkeypatch) -> None:
     payload = deployment_payload()
-    payload["vllm_image"] = "hashicorp/http-echo:1.0"
-    monkeypatch.setattr(Config, "K8S_SMOKE_TEST_IMAGE", "hashicorp/http-echo:1.0")
+    payload["vllm_image"] = "python:3.12-alpine"
+    monkeypatch.setattr(Config, "K8S_SMOKE_TEST_IMAGE", "python:3.12-alpine")
 
     manifest = build_deployment_manifest(payload)
     container = manifest["spec"]["template"]["spec"]["containers"][0]
 
-    assert container["args"] == ["-listen=:8000", "-text=ok"]
+    assert container["command"][0] == "python"
     assert container["imagePullPolicy"] == "IfNotPresent"
     assert container["readinessProbe"]["httpGet"]["path"] == "/health"
 
@@ -284,6 +300,7 @@ def test_inspect_model_readiness_ready() -> None:
     assert status["ready"] is True
     assert status["scheduled_pods"] == 1
     assert status["ready_pods"] == 1
+    assert status["pods"][0]["name"] == "pod-a"
 
 
 def test_inspect_model_readiness_detects_image_pull_failure() -> None:

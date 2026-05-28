@@ -323,12 +323,20 @@ For the MVP, `v1` is a fixed internal Kubernetes resource suffix for the deploym
 
 ## 5.4 vLLM Workers
 
-Each deployed model runs as one or more vLLM worker pods.
+Each deployed model runs as one or more vLLM worker pods. Clients provide the
+Hugging Face model id and resource settings; MiniTen chooses the container image
+as an internal provisioning detail.
 
-The worker uses a generic vLLM image, such as:
+GPU-backed deployments use the standard vLLM image:
 
 ```text
 vllm/vllm-openai:latest
+```
+
+CPU-only deployments use the CPU-specific vLLM image:
+
+```text
+vllm/vllm-openai-cpu:latest-x86_64
 ```
 
 The model is selected through runtime arguments:
@@ -341,7 +349,8 @@ The model is selected through runtime arguments:
 --max-model-len 4096
 ```
 
-The same vLLM image can serve many different Hugging Face models.
+The same MiniTen-selected image can serve many different Hugging Face models in
+the matching CPU or GPU runtime mode.
 
 ---
 
@@ -407,6 +416,36 @@ kubeconfig to `.local/kube/config`. The Compose worker uses host networking so
 kind's localhost API endpoint still matches its TLS certificate. Real local
 Kubernetes runs use `make test-local-k8s`, which switches the Compose worker to
 `WORKER_DRY_RUN=false` before deploying a smoke-test model.
+
+The real local Kubernetes smoke test uses a lightweight OpenAI-compatible
+Python HTTP container instead of the full vLLM image. It validates Kubernetes
+resource creation/deletion, the model logs endpoint, project API key inference,
+request metadata logging, and analytics reads. Because `make run-api` executes
+Flask on the host, the smoke test opens a temporary `kubectl port-forward` and
+local debug inference routing uses `INFERENCE_LOCAL_PORT_FORWARD_URL`; deployed
+API containers use Kubernetes Service DNS directly.
+
+`make test-local-vllm` is the slower production-like smoke path. It deploys a
+real vLLM image, waits for a small Hugging Face model to load, calls
+`/v1/chat/completions`, verifies analytics metadata, and prints Kubernetes pod,
+event, describe, and log diagnostics when startup or readiness fails. The local
+command uses `vllm/vllm-openai-cpu:latest-x86_64` and
+`MINITEN_VLLM_TEST_DEVICE=cpu` by default because Docker Desktop/kind usually
+does not expose GPUs to pods and the normal `vllm/vllm-openai` image is the GPU
+path. The default test model is a small instruct model because
+`/v1/chat/completions` requires a tokenizer with a chat template. GPU validation
+should use the normal vLLM image and set
+`MINITEN_VLLM_TEST_DEVICE=cuda` only after the Kubernetes node advertises GPU
+resources. MiniTen passes this value through the `VLLM_TARGET_DEVICE`
+environment variable, because vLLM reads it while constructing CLI defaults and
+the CPU image does not accept a `--device` CLI flag. CPU deployments also pass
+MiniTen's internal `VLLM_CPU_MEMORY_UTILIZATION` setting so vLLM's CPU KV-cache
+reservation fits inside local Docker Desktop/kind memory. The local vLLM smoke
+test also uses a short context length and a larger memory limit than the fast
+smoke test because CPU vLLM has meaningful startup overhead. Model pods use `imagePullPolicy:
+IfNotPresent` so restarts reuse images already present in the node image store.
+In kind, that cache is inside the kind node container's containerd store, not
+necessarily the host Docker Images view.
 
 The Deployment Worker:
 

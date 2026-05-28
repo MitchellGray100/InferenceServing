@@ -255,37 +255,69 @@ def build_vllm_container(
 
     # vLLM exposes an OpenAI-compatible HTTP server. The deployment name is the
     # served model name clients use in `/v1/chat/completions`.
+    args = [
+        "--model",
+        deployment["model_id"],
+        "--served-model-name",
+        deployment["name"],
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(VLLM_PORT),
+        "--dtype",
+        deployment["vllm_dtype"],
+        "--max-model-len",
+        str(deployment["vllm_max_model_len"]),
+    ]
+    if deployment.get("gpu_count", 0) == 0 and Config.VLLM_CPU_MEMORY_UTILIZATION:
+        # vLLM CPU defaults reserve most node memory for KV cache, which is too
+        # aggressive for local kind/Docker Desktop. Keep this MiniTen-managed
+        # setting internal instead of exposing raw vLLM memory flags to users.
+        args.extend(
+            [
+                "--gpu-memory-utilization",
+                str(Config.VLLM_CPU_MEMORY_UTILIZATION),
+            ]
+        )
+    env = [
+        {
+            # Persist Hugging Face cache on the PVC so restarts do not
+            # redownload model weights every time.
+            "name": "HF_HOME",
+            "value": HF_CACHE_MOUNT_PATH,
+        }
+    ]
+    if Config.VLLM_DEVICE:
+        # Local kind clusters usually do not expose GPUs to pods. Letting vLLM
+        # auto-detect the device can crash before readiness starts. vLLM reads
+        # VLLM_TARGET_DEVICE while constructing CLI defaults. Newer CPU images
+        # do not accept a `--device` CLI flag, so keep device selection in env.
+        env.append(
+            {
+                "name": "VLLM_TARGET_DEVICE",
+                "value": Config.VLLM_DEVICE,
+            }
+        )
+    if Config.VLLM_LOGGING_LEVEL:
+        env.append(
+            {
+                "name": "VLLM_LOGGING_LEVEL",
+                "value": Config.VLLM_LOGGING_LEVEL,
+            }
+        )
+
     container = {
         "name": "vllm",
         "image": deployment["vllm_image"],
-        "args": [
-            "--model",
-            deployment["model_id"],
-            "--served-model-name",
-            deployment["name"],
-            "--host",
-            "0.0.0.0",
-            "--port",
-            str(VLLM_PORT),
-            "--dtype",
-            deployment["vllm_dtype"],
-            "--max-model-len",
-            str(deployment["vllm_max_model_len"]),
-        ],
+        "imagePullPolicy": "IfNotPresent",
+        "args": args,
         "ports": [
             {
                 "name": VLLM_PORT_NAME,
                 "containerPort": VLLM_PORT,
             }
         ],
-        "env": [
-            {
-                # Persist Hugging Face cache on the PVC so restarts do not
-                # redownload model weights every time.
-                "name": "HF_HOME",
-                "value": HF_CACHE_MOUNT_PATH,
-            }
-        ],
+        "env": env,
         "resources": build_resource_requirements(deployment),
         "volumeMounts": [
             {
@@ -334,11 +366,31 @@ def build_smoke_test_container(
     cluster tests can validate Namespace/PVC/Deployment/Service/HPA/log plumbing
     without pulling or loading a large vLLM image.
     """
+    server_code = (
+        "import json\n"
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200)\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(b'ok')\n"
+        "    def do_POST(self):\n"
+        "        length = int(self.headers.get('content-length', '0'))\n"
+        "        body = json.loads(self.rfile.read(length) or b'{}')\n"
+        "        payload = {'id': 'chatcmpl-smoke', 'object': 'chat.completion', 'model': body.get('model', 'smoke'), 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'smoke ok'}, 'finish_reason': 'stop'}]}\n"
+        "        encoded = json.dumps(payload).encode()\n"
+        "        self.send_response(200)\n"
+        "        self.send_header('content-type', 'application/json')\n"
+        "        self.send_header('content-length', str(len(encoded)))\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(encoded)\n"
+        "HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()\n"
+    )
     return {
         "name": "vllm",
         "image": deployment["vllm_image"],
         "imagePullPolicy": "IfNotPresent",
-        "args": ["-listen=:8000", "-text=ok"],
+        "command": ["python", "-c", server_code],
         "ports": [
             {
                 "name": VLLM_PORT_NAME,

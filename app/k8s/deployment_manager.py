@@ -263,6 +263,7 @@ def inspect_model_readiness(
         "scheduled_pods": scheduled_pods,
         "ready_pods": ready_pods,
         "pod_count": len(pods),
+        "pods": summarize_pods(pods),
     }
 
 
@@ -359,6 +360,35 @@ def first_pod_failure_reason(pods: list[Any]) -> str | None:
                 detail = f": {message}" if message else ""
                 return f"Pod {pod_name} is waiting with {reason}{detail}"
     return None
+
+
+def summarize_pods(pods: list[Any]) -> list[dict[str, Any]]:
+    """Return compact pod diagnostics for readiness timeout/error messages."""
+    summaries = []
+    for pod in pods:
+        container_states = []
+        for status in value_at(pod, "status.container_statuses") or []:
+            container_states.append(
+                {
+                    "name": value_at(status, "name"),
+                    "ready": value_at(status, "ready"),
+                    "restart_count": value_at(status, "restart_count"),
+                    "waiting_reason": value_at(status, "state.waiting.reason"),
+                    "waiting_message": value_at(status, "state.waiting.message"),
+                    "terminated_reason": value_at(status, "state.terminated.reason"),
+                }
+            )
+        summaries.append(
+            {
+                "name": value_at(pod, "metadata.name"),
+                "phase": value_at(pod, "status.phase"),
+                "pod_ip": value_at(pod, "status.pod_ip"),
+                "scheduled": is_pod_scheduled(pod),
+                "ready": is_pod_ready(pod),
+                "containers": container_states,
+            }
+        )
+    return summaries
 
 
 def value_at(obj: Any, path: str) -> Any:

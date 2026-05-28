@@ -32,6 +32,10 @@ class Config:
     # Kubernetes/vLLM deployment defaults.
     K8S_NAMESPACE_PREFIX = os.getenv("K8S_NAMESPACE_PREFIX", "miniten")
     VLLM_IMAGE = os.getenv("VLLM_IMAGE", "vllm/vllm-openai:latest")
+    VLLM_CPU_IMAGE = os.getenv("VLLM_CPU_IMAGE", "vllm/vllm-openai-cpu:latest-x86_64")
+    VLLM_DEVICE = os.getenv("VLLM_DEVICE")
+    VLLM_CPU_MEMORY_UTILIZATION = os.getenv("VLLM_CPU_MEMORY_UTILIZATION", "0.25")
+    VLLM_LOGGING_LEVEL = os.getenv("VLLM_LOGGING_LEVEL")
     DEFAULT_MODEL_REPLICAS = int(os.getenv("DEFAULT_MODEL_REPLICAS", "1"))
     DEFAULT_HPA_MIN_REPLICAS = int(os.getenv("DEFAULT_HPA_MIN_REPLICAS", "1"))
     DEFAULT_HPA_MAX_REPLICAS = int(os.getenv("DEFAULT_HPA_MAX_REPLICAS", "3"))
@@ -42,13 +46,18 @@ class Config:
     HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
     K8S_SMOKE_TEST_IMAGE = os.getenv(
         "K8S_SMOKE_TEST_IMAGE",
-        "hashicorp/http-echo:1.0",
+        "python:3.12-alpine",
+    )
+    K8S_SMOKE_TEST_MODEL_ID = os.getenv(
+        "K8S_SMOKE_TEST_MODEL_ID",
+        "miniten/smoke-openai-compatible",
     )
 
     # HTTP timeout for synchronous proxy calls from Flask to vLLM.
     INFERENCE_UPSTREAM_TIMEOUT_SECONDS = int(
         os.getenv("INFERENCE_UPSTREAM_TIMEOUT_SECONDS", "300")
     )
+    INFERENCE_LOCAL_PORT_FORWARD_URL = os.getenv("INFERENCE_LOCAL_PORT_FORWARD_URL")
 
     # Runtime process defaults.
     API_HOST = os.getenv("API_HOST", "0.0.0.0")

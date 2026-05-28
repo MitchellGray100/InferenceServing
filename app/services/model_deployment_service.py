@@ -58,7 +58,6 @@ DEFAULT_MEMORY_REQUEST = "4Gi"
 DEFAULT_MEMORY_LIMIT = "8Gi"
 MAX_MODEL_ID_LENGTH = 255
 MAX_RESOURCE_TEXT_LENGTH = 32
-MAX_VLLM_IMAGE_LENGTH = 255
 MAX_VLLM_DTYPE_LENGTH = 32
 MAX_REPLICAS = 100
 MAX_GPU_COUNT = 16
@@ -537,13 +536,28 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
             status_code=400,
         )
 
+    model_id = validate_string(
+        data.get("model_id"),
+        "model_id",
+        max_length=MAX_MODEL_ID_LENGTH,
+    )
+    gpu_count = validate_positive_int(
+        resources.get("gpu_count", 0),
+        "gpu_count",
+        min_value=0,
+        max_value=MAX_GPU_COUNT,
+    )
+
+    if "image" in vllm:
+        raise ApiError(
+            type="validation_error",
+            message="vllm.image is managed by MiniTen and cannot be set by clients.",
+            status_code=400,
+        )
+
     return {
         "name": validate_deployment_name(data.get("name")),
-        "model_id": validate_string(
-            data.get("model_id"),
-            "model_id",
-            max_length=MAX_MODEL_ID_LENGTH,
-        ),
+        "model_id": model_id,
         "replicas": replicas,
         "cpu_request": _optional_resource_text(
             resources.get("cpu_request"),
@@ -565,17 +579,8 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
             "memory_limit",
             DEFAULT_MEMORY_LIMIT,
         ),
-        "gpu_count": validate_positive_int(
-            resources.get("gpu_count", 0),
-            "gpu_count",
-            min_value=0,
-            max_value=MAX_GPU_COUNT,
-        ),
-        "vllm_image": validate_string(
-            vllm.get("image", current_app.config["VLLM_IMAGE"]),
-            "image",
-            max_length=MAX_VLLM_IMAGE_LENGTH,
-        ),
+        "gpu_count": gpu_count,
+        "vllm_image": select_vllm_image(model_id, gpu_count),
         "vllm_dtype": validate_string(
             vllm.get("dtype", "auto"),
             "dtype",
@@ -614,6 +619,25 @@ def build_k8s_names(k8s_namespace: str, deployment_name: str) -> dict[str, str]:
         "k8s_service_name": names["k8s_service_name"],
         "k8s_hpa_name": names["k8s_hpa_name"],
     }
+
+
+def select_vllm_image(model_id: str, gpu_count: int) -> str:
+    """Choose MiniTen-managed vLLM image for a deployment.
+
+    Clients do not provide container images. MiniTen owns that provisioning
+    detail so CPU-only deployments get a CPU-capable image and GPU deployments
+    get the standard GPU image. The local smoke model is a debug-only escape
+    hatch so fast Kubernetes tests can use a tiny OpenAI-compatible container
+    without exposing custom images in the public API.
+    """
+    if (
+        current_app.config.get("API_DEBUG", False)
+        and model_id == current_app.config.get("K8S_SMOKE_TEST_MODEL_ID")
+    ):
+        return current_app.config["K8S_SMOKE_TEST_IMAGE"]
+    if gpu_count == 0:
+        return current_app.config["VLLM_CPU_IMAGE"]
+    return current_app.config["VLLM_IMAGE"]
 
 
 def get_project_for_user_with_cursor(cur: Any, project_id: str, user_id: str) -> Any:

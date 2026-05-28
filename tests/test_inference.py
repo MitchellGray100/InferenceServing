@@ -23,6 +23,7 @@ class TestConfig:
     SECRET_KEY = "test-secret-key-change-me-32-bytes"
     API_KEY_HASH_SECRET = "test-api-key-hash-secret-change-me-32-bytes"
     INFERENCE_UPSTREAM_TIMEOUT_SECONDS = 12
+    API_DEBUG = False
 
 
 @pytest.fixture
@@ -100,13 +101,29 @@ def test_get_project_api_key_accepts_case_insensitive_bearer(app) -> None:
 
 
 def test_build_vllm_url() -> None:
-    assert inference_service.build_vllm_url(deployment_row(), "/v1/chat/completions") == (
-        "http://qwen-small-prod.miniten-personal.svc.cluster.local:8000"
-        "/v1/chat/completions"
-    )
-    assert inference_service.build_vllm_url(deployment_row(), "health").endswith(
-        ":8000/health"
-    )
+    app = create_app(TestConfig)
+    with app.app_context():
+        assert inference_service.build_vllm_url(
+            deployment_row(), "/v1/chat/completions"
+        ) == (
+            "http://qwen-small-prod.miniten-personal.svc.cluster.local:8000"
+            "/v1/chat/completions"
+        )
+        assert inference_service.build_vllm_url(deployment_row(), "health").endswith(
+            ":8000/health"
+        )
+
+
+def test_build_vllm_url_uses_local_port_forward_in_debug() -> None:
+    class DebugConfig(TestConfig):
+        API_DEBUG = True
+
+    app = create_app(DebugConfig)
+    with app.app_context():
+        assert inference_service.build_vllm_url(
+            deployment_row(),
+            "/v1/chat/completions",
+        ) == "http://127.0.0.1:18080/v1/chat/completions"
 
 
 def test_ensure_deployment_running_rejects_non_running() -> None:

@@ -297,7 +297,7 @@ CREATE TABLE model_deployments (
   gpu_count INTEGER NOT NULL DEFAULT 0,
 
   -- vLLM configuration
-  vllm_image TEXT NOT NULL DEFAULT 'vllm/vllm-openai:latest',
+  vllm_image TEXT NOT NULL DEFAULT 'vllm/vllm-openai-cpu:latest-x86_64',
   vllm_dtype TEXT NOT NULL DEFAULT 'auto',
   vllm_max_model_len INTEGER NOT NULL DEFAULT 4096,
 
@@ -338,7 +338,7 @@ CREATE TABLE model_deployments (
 | `memory_request` | `TEXT` | No | Kubernetes memory request. Example: `8Gi`. |
 | `memory_limit` | `TEXT` | No | Kubernetes memory limit. Example: `16Gi`. |
 | `gpu_count` | `INTEGER` | Yes | Number of GPUs requested by the model worker. |
-| `vllm_image` | `TEXT` | Yes | vLLM container image. |
+| `vllm_image` | `TEXT` | Yes | MiniTen-selected vLLM container image. CPU-only deployments use the CPU image; GPU deployments use the GPU image. |
 | `vllm_dtype` | `TEXT` | Yes | vLLM dtype setting. Example: `auto`, `float16`, `bfloat16`. |
 | `vllm_max_model_len` | `INTEGER` | Yes | Maximum model context length passed to vLLM. |
 | `autoscaling_enabled` | `BOOLEAN` | Yes | Whether HPA should be enabled. |
@@ -1078,7 +1078,6 @@ the job is stale and is marked `skipped` without changing Kubernetes state.
     "target_cpu_utilization": 70
   },
   "vllm": {
-    "image": "vllm/vllm-openai:latest",
     "dtype": "auto",
     "max_model_len": 4096
   }
@@ -1469,7 +1468,7 @@ CREATE TABLE model_deployments (
   memory_limit TEXT,
   gpu_count INTEGER NOT NULL DEFAULT 0,
 
-  vllm_image TEXT NOT NULL DEFAULT 'vllm/vllm-openai:latest',
+  vllm_image TEXT NOT NULL DEFAULT 'vllm/vllm-openai-cpu:latest-x86_64',
   vllm_dtype TEXT NOT NULL DEFAULT 'auto',
   vllm_max_model_len INTEGER NOT NULL DEFAULT 4096,
 

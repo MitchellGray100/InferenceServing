@@ -22,6 +22,11 @@ services:
       SECRET_KEY: dev-secret-key-change-me-32-bytes
       API_KEY_HASH_SECRET: dev-api-key-hash-secret-change-me-32-bytes
       WEB_CONCURRENCY: 2
+      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+      VLLM_CPU_IMAGE: ${VLLM_CPU_IMAGE:-vllm/vllm-openai-cpu:latest-x86_64}
+      VLLM_CPU_MEMORY_UTILIZATION: ${VLLM_CPU_MEMORY_UTILIZATION:-0.25}
+      K8S_SMOKE_TEST_IMAGE: ${K8S_SMOKE_TEST_IMAGE:-python:3.12-alpine}
+      K8S_SMOKE_TEST_MODEL_ID: ${K8S_SMOKE_TEST_MODEL_ID:-miniten/smoke-openai-compatible}
       LOG_LEVEL: INFO
     ports:
       - "8000:8000"
@@ -48,8 +53,14 @@ services:
       API_KEY_HASH_SECRET: dev-api-key-hash-secret-change-me-32-bytes
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2.0}
       WORKER_DRY_RUN: ${WORKER_DRY_RUN:-false}
-      K8S_SMOKE_TEST_IMAGE: ${K8S_SMOKE_TEST_IMAGE:-hashicorp/http-echo:1.0}
+      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+      VLLM_CPU_IMAGE: ${VLLM_CPU_IMAGE:-vllm/vllm-openai-cpu:latest-x86_64}
+      VLLM_CPU_MEMORY_UTILIZATION: ${VLLM_CPU_MEMORY_UTILIZATION:-0.25}
+      K8S_SMOKE_TEST_IMAGE: ${K8S_SMOKE_TEST_IMAGE:-python:3.12-alpine}
+      K8S_SMOKE_TEST_MODEL_ID: ${K8S_SMOKE_TEST_MODEL_ID:-miniten/smoke-openai-compatible}
       HUGGING_FACE_TOKEN: ${HUGGING_FACE_TOKEN:-}
+      VLLM_DEVICE: ${VLLM_DEVICE:-}
+      VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-}
       KUBECONFIG: /root/.kube/config
       LOG_LEVEL: INFO
     volumes:

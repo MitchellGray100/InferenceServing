@@ -180,6 +180,57 @@ def get_model_deployment(
     return serialize_model_deployment(deployment)
 
 
+def list_model_deployment_jobs(
+    user_id: Any,
+    project_id: Any,
+    model_deployment_id: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return deployment command history for one model deployment.
+
+    Unlike `get_model_deployment`, this endpoint intentionally allows
+    soft-deleted deployments. The delete command is stored in
+    `deployment_jobs`, so a dashboard or smoke test needs to read the final
+    delete job even after the worker has marked the deployment deleted.
+    """
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+    canonical_model_deployment_id = validate_uuid(
+        model_deployment_id,
+        "modelDeploymentID",
+    )
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
+            require_role(role, VIEW_ROLES)
+            deployment = get_model_deployment_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+                include_deleted=True,
+            )
+            if deployment is None:
+                logger.info(
+                    "Deployment job history lookup missed model_deployment_id=%s project_id=%s.",
+                    canonical_model_deployment_id,
+                    canonical_project_id,
+                )
+                raise model_deployment_not_found_error()
+
+            cur.execute(
+                queries.get("list_deployment_jobs_for_model"),
+                {"model_deployment_id": deployment["model_deployment_id"]},
+            )
+            rows = cur.fetchall()
+
+    logger.debug(
+        "Listed deployment jobs model_deployment_id=%s count=%s.",
+        canonical_model_deployment_id,
+        len(rows),
+    )
+    return {"deploymentJobs": [serialize_deployment_job(row) for row in rows]}
+
+
 def start_model_deployment(
     user_id: Any,
     project_id: Any,
@@ -561,10 +612,22 @@ def get_model_deployment_with_cursor(
     cur: Any,
     project_id: str,
     model_deployment_id: str,
+    *,
+    include_deleted: bool = False,
 ) -> Any:
-    """Return one non-deleted deployment using an existing DB cursor."""
+    """Return one deployment using an existing DB cursor.
+
+    Most callers use the non-deleted lookup because normal control-plane
+    commands should not act on deleted models. Job history opts into
+    `include_deleted` so completed delete jobs remain visible.
+    """
+    query_name = (
+        "get_model_deployment_by_id_including_deleted"
+        if include_deleted
+        else "get_model_deployment_by_id"
+    )
     cur.execute(
-        queries.get("get_model_deployment_by_id"),
+        queries.get(query_name),
         {
             "project_id": project_id,
             "model_deployment_id": model_deployment_id,

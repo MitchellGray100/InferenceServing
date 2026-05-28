@@ -1455,7 +1455,75 @@ project_members
 
 ---
 
-## 6.4 Scale model
+## 6.4 List model deployment jobs
+
+```http
+GET /v1/projects/{projectID}/models/{modelDeploymentID}/jobs
+```
+
+### Purpose
+
+Returns recent deployment command history for one model deployment.
+
+Used by:
+
+```text
+Model detail page
+CLI inspect model command
+Local API smoke tests
+```
+
+### Auth
+
+User auth token required.
+
+### Permissions
+
+```text
+owner, member, viewer
+```
+
+### Behavior
+
+```text
+1. Verify user can view the project.
+2. Find the model by projectID + modelDeploymentID, including soft-deleted rows.
+3. Return deployment_jobs rows newest first.
+```
+
+The lookup includes soft-deleted deployments so a completed `delete_model` job
+remains visible after the worker marks the model deployment deleted.
+
+### Response
+
+```json
+{
+  "deploymentJobs": [
+    {
+      "deploymentJobID": "3ef7d993-cb61-4392-b36b-2ed2e1d88af1",
+      "job_type": "deploy_model",
+      "desired_generation": 1,
+      "status": "succeeded",
+      "attempts": 0,
+      "last_error": null,
+      "created_at": "2026-05-17T12:00:00Z",
+      "updated_at": "2026-05-17T12:00:03Z"
+    }
+  ]
+}
+```
+
+### Tables used
+
+```text
+project_members
+model_deployments
+deployment_jobs
+```
+
+---
+
+## 6.5 Scale model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/scale
@@ -1540,7 +1608,7 @@ The Deployment Worker patches Deployment and HPA resources.
 
 ---
 
-## 6.5 Start model
+## 6.6 Start model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/start
@@ -1621,7 +1689,7 @@ The Deployment Worker scales the Deployment up and restores HPA settings if need
 
 ---
 
-## 6.6 Stop model
+## 6.7 Stop model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/stop
@@ -1697,7 +1765,7 @@ The Deployment Worker handles HPA first, then scales the Deployment to zero.
 
 ---
 
-## 6.7 Delete model
+## 6.8 Delete model
 
 ```http
 DELETE /v1/projects/{projectID}/models/{modelDeploymentID}
@@ -1766,7 +1834,7 @@ The Deployment Worker deletes HPA, Service, Deployment, Secret, and other deploy
 
 ---
 
-## 6.8 Get model logs
+## 6.9 Get model logs
 
 ```http
 GET /v1/projects/{projectID}/models/{modelName}/logs

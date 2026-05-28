@@ -1,7 +1,7 @@
 PYTHON ?= python
 POETRY ?= $(PYTHON) -m poetry
 
-.PHONY: install setup-env clean-env migrate run-api run-api-gunicorn run-worker test-local-apis tests coverage lint compile clean
+.PHONY: install setup-env clean-env migrate run-api run-api-gunicorn run-worker run-worker-dry-run test-local-apis tests coverage lint compile clean
 
 install:
 	$(PYTHON) -m pip install --upgrade pip poetry
@@ -12,6 +12,8 @@ setup-env: install
 	docker compose up -d postgres
 	$(POETRY) run python scripts/wait_for_postgres.py
 	$(POETRY) run python -m app.db.migrate
+	mkdir -p .local/kube
+	WORKER_DRY_RUN=true WORKER_POLL_INTERVAL_SECONDS=0.2 KUBECONFIG_DIR=.local/kube docker compose up -d --build worker
 	$(POETRY) run python scripts/local_env_guard.py mark-setup-complete
 
 clean-env:
@@ -37,6 +39,9 @@ endif
 
 run-worker:
 	$(POETRY) run python -m app.services.deployment_worker
+
+run-worker-dry-run:
+	WORKER_DRY_RUN=true $(POETRY) run python -m app.services.deployment_worker
 
 test-local-apis:
 	$(POETRY) run python scripts/smoke_test_local_api.py

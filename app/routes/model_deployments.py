@@ -69,6 +69,21 @@ def get_model_deployment(
     return jsonify(response), 200
 
 
+@bp.get("/<project_id>/models/<model_deployment_id>/jobs")
+@require_user_auth
+def list_model_deployment_jobs(
+    project_id: str,
+    model_deployment_id: str,
+) -> tuple[object, int]:
+    """Return deployment command history for one model deployment."""
+    response = model_deployment_service.list_model_deployment_jobs(
+        current_user_id(),
+        project_id,
+        model_deployment_id,
+    )
+    return jsonify(response), 200
+
+
 @bp.post("/<project_id>/models/<model_deployment_id>/start")
 @require_user_auth
 def start_model_deployment(

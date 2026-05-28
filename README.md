@@ -706,7 +706,7 @@ Example local workflow:
 ```bash
 make setup-env
 make run-api
-make run-worker
+make test-local-apis
 ```
 
 Common development commands:
@@ -718,6 +718,7 @@ make clean-env
 make migrate
 make run-api
 make run-worker
+make run-worker-dry-run
 make test-local-apis
 make lint
 make tests
@@ -726,13 +727,15 @@ make clean
 ```
 
 `make setup-env` installs Python dependencies, starts local Postgres through
-Docker Compose, waits for it to accept connections, and applies migrations.
+Docker Compose, waits for it to accept connections, applies migrations, and
+starts the local Deployment Worker in dry-run mode.
 `make clean-env` stops Compose services and removes the local Postgres volume.
 `make test-local-apis` runs HTTP smoke tests against a running local API, so
 start `make run-api` in another terminal first. The smoke test waits for
-`GET /readyz` before exercising authenticated endpoints. If `setup-env` restarts
-Postgres while the API is already running, restart `make run-api` so the local
-Flask process opens fresh database connections.
+`GET /readyz` before exercising authenticated endpoints, then verifies queued
+deployment jobs are consumed and marked `succeeded`. If `setup-env` restarts
+Postgres while the API is already running, restart `make run-api` so the Flask
+process opens fresh database connections.
 
 The Makefile enforces the expected order for local development:
 
@@ -750,6 +753,15 @@ works on Windows/Git Bash. Gunicorn depends on Unix-only modules such as
 `fcntl`, so `make run-api-gunicorn` is for Linux/WSL-style environments only.
 The Docker image uses the Gunicorn path by default, while the Compose `worker`
 service overrides the command to run `python -m app.services.deployment_worker`.
+`make setup-env` always starts that worker for local development with
+`WORKER_DRY_RUN=true`, so local deployment commands are processed without
+mutating a Kubernetes cluster. `make run-worker` uses the real Kubernetes
+client, and `make run-worker-dry-run` runs a foreground dry-run worker when you
+want to inspect worker logs directly.
+
+For a Docker Compose worker that mutates a real local kind/minikube cluster, set
+`WORKER_DRY_RUN=false` and point `KUBECONFIG_DIR` at the host kubeconfig
+directory before starting the worker.
 
 Logging is controlled with `LOG_LEVEL`, defaulting to `INFO`. Use `DEBUG` when
 you need lower-level SQL/Kubernetes/auth diagnostics. Logs intentionally avoid

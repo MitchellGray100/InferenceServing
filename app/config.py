@@ -53,4 +53,10 @@ class Config:
     WORKER_POLL_INTERVAL_SECONDS = float(
         os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2.0")
     )
+    WORKER_DRY_RUN = os.getenv("WORKER_DRY_RUN", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

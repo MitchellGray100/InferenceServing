@@ -53,6 +53,10 @@ jobs:
         if: failure()
         run: cat /tmp/miniten-api.log || true
 
+      - name: Print worker logs on failure
+        if: failure()
+        run: docker compose logs worker || true
+
       - name: Stop local API
         if: always()
         run: |

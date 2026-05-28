@@ -897,6 +897,11 @@ This table answers:
 
 The `deployment_jobs` table is for control-plane operations only. Normal inference requests, such as `/v1/chat/completions`, should not use this queue in the MVP.
 
+The API exposes per-model job history through
+`GET /v1/projects/{projectID}/models/{modelDeploymentID}/jobs`. That endpoint
+can read jobs for a soft-deleted model deployment so the final `delete_model`
+command remains inspectable after the worker finishes cleanup.
+
 ## Table Definition
 
 ```sql

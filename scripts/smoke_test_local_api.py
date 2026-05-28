@@ -3,6 +3,8 @@
 The script intentionally exercises the real Flask server and local Postgres
 database instead of Flask's in-process test client. Start the API first with
 `make run-api`, then run `make test-local-apis` in another terminal.
+`make setup-env` starts the local dry-run deployment worker that consumes the
+deployment jobs exercised by this script.
 """
 
 from __future__ import annotations
@@ -167,6 +169,20 @@ def run_smoke_tests(base_url: str) -> None:
         expected_status=201,
     )
     model_deployment_id = deployment_command["modelDeployment"]["modelDeploymentID"]
+    wait_for_deployment_job(
+        client,
+        project_id,
+        model_deployment_id,
+        deployment_command["deploymentJob"]["deploymentJobID"],
+        owner_token,
+    )
+    wait_for_model_status(
+        client,
+        project_id,
+        model_deployment_id,
+        owner_token,
+        "running",
+    )
     client.request("GET", f"/v1/projects/{project_id}/models", token=owner_token)
     client.request(
         "GET",
@@ -189,21 +205,49 @@ def run_smoke_tests(base_url: str) -> None:
         token=owner_token,
     )
 
-    client.request(
+    start_command = client.request(
         "POST",
         f"/v1/projects/{project_id}/models/{model_deployment_id}/start",
         token=owner_token,
         headers={"Idempotency-Key": f"start-{suffix}"},
         expected_status=202,
     )
-    client.request(
+    wait_for_deployment_job(
+        client,
+        project_id,
+        model_deployment_id,
+        start_command["deploymentJob"]["deploymentJobID"],
+        owner_token,
+    )
+    wait_for_model_status(
+        client,
+        project_id,
+        model_deployment_id,
+        owner_token,
+        "running",
+    )
+    stop_command = client.request(
         "POST",
         f"/v1/projects/{project_id}/models/{model_deployment_id}/stop",
         token=owner_token,
         headers={"Idempotency-Key": f"stop-{suffix}"},
         expected_status=202,
     )
-    client.request(
+    wait_for_deployment_job(
+        client,
+        project_id,
+        model_deployment_id,
+        stop_command["deploymentJob"]["deploymentJobID"],
+        owner_token,
+    )
+    wait_for_model_status(
+        client,
+        project_id,
+        model_deployment_id,
+        owner_token,
+        "stopped",
+    )
+    scale_command = client.request(
         "POST",
         f"/v1/projects/{project_id}/models/{model_deployment_id}/scale",
         token=owner_token,
@@ -211,12 +255,26 @@ def run_smoke_tests(base_url: str) -> None:
         json={"replicas": 2},
         expected_status=202,
     )
-    client.request(
+    wait_for_deployment_job(
+        client,
+        project_id,
+        model_deployment_id,
+        scale_command["deploymentJob"]["deploymentJobID"],
+        owner_token,
+    )
+    delete_command = client.request(
         "DELETE",
         f"/v1/projects/{project_id}/models/{model_deployment_id}",
         token=owner_token,
         headers={"Idempotency-Key": f"delete-model-{suffix}"},
         expected_status=202,
+    )
+    wait_for_deployment_job(
+        client,
+        project_id,
+        model_deployment_id,
+        delete_command["deploymentJob"]["deploymentJobID"],
+        owner_token,
     )
 
     client.request(
@@ -254,6 +312,73 @@ def ensure_api_is_running(client: SmokeClient) -> None:
         "Could not reach the local API. Start it in another terminal with "
         "`make run-api`, then rerun `make test-local-apis`."
     ) from last_error
+
+
+def wait_for_deployment_job(
+    client: SmokeClient,
+    project_id: str,
+    model_deployment_id: str,
+    deployment_job_id: str,
+    token: str,
+    expected_status: str = "succeeded",
+) -> None:
+    """Wait for the worker to process a deployment job."""
+    last_status = None
+
+    for _ in range(30):
+        body = client.request(
+            "GET",
+            f"/v1/projects/{project_id}/models/{model_deployment_id}/jobs",
+            token=token,
+        )
+        for job in body["deploymentJobs"]:
+            if job["deploymentJobID"] != deployment_job_id:
+                continue
+
+            last_status = job["status"]
+            if last_status == expected_status:
+                return
+            if last_status in {"failed", "skipped"}:
+                raise RuntimeError(
+                    f"Deployment job {deployment_job_id} ended with {last_status}."
+                )
+
+        time.sleep(1)
+
+    raise RuntimeError(
+        f"Timed out waiting for deployment job {deployment_job_id}; "
+        f"last status was {last_status}. Confirm `make setup-env` started the "
+        "local dry-run worker."
+    )
+
+
+def wait_for_model_status(
+    client: SmokeClient,
+    project_id: str,
+    model_deployment_id: str,
+    token: str,
+    expected_status: str,
+) -> None:
+    """Wait for a model deployment to reach an expected status."""
+    last_status = None
+
+    for _ in range(30):
+        body = client.request(
+            "GET",
+            f"/v1/projects/{project_id}/models/{model_deployment_id}",
+            token=token,
+        )
+        last_status = body["status"]
+
+        if last_status == expected_status:
+            return
+
+        time.sleep(1)
+
+    raise RuntimeError(
+        f"Timed out waiting for model {model_deployment_id} to become "
+        f"{expected_status}; last status was {last_status}."
+    )
 
 
 def parse_args() -> argparse.Namespace:

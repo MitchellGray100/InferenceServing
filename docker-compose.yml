@@ -45,12 +45,14 @@ services:
       DATABASE_URL: postgresql://miniten:miniten@postgres:5432/miniten
       SECRET_KEY: dev-secret-key-change-me-32-bytes
       API_KEY_HASH_SECRET: dev-api-key-hash-secret-change-me-32-bytes
-      WORKER_POLL_INTERVAL_SECONDS: 2.0
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2.0}
+      WORKER_DRY_RUN: ${WORKER_DRY_RUN:-false}
       KUBECONFIG: /root/.kube/config
       LOG_LEVEL: INFO
     volumes:
-      # Lets the worker talk to a local kind/minikube cluster from Docker.
-      - ${USERPROFILE}/.kube:/root/.kube:ro
+      # For real Kubernetes mutations, set KUBECONFIG_DIR to your host kube
+      # config directory. Dry-run local setup uses the ignored .local/kube dir.
+      - ${KUBECONFIG_DIR:-./.local/kube}:/root/.kube:ro
     command: ["python", "-m", "app.services.deployment_worker"]
 
 volumes:

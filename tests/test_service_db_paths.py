@@ -517,6 +517,8 @@ def test_model_deployment_service_create_list_get_commands(monkeypatch, app) -> 
             {"role": "viewer"},
             {"role": "viewer"},
             deployment_row(),
+            {"role": "viewer"},
+            deployment_row(),
             {"role": "member"},
             deployment_row(),
             deployment_row(status="deploying"),
@@ -530,7 +532,7 @@ def test_model_deployment_service_create_list_get_commands(monkeypatch, app) -> 
             deployment_row(),
             deployment_row(status="deleting"),
         ],
-        fetchalls=[[deployment_row()]],
+        fetchalls=[[deployment_row()], [job_row()]],
     )
     monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
     monkeypatch.setattr(
@@ -549,6 +551,11 @@ def test_model_deployment_service_create_list_get_commands(monkeypatch, app) -> 
         )
         listed = model_deployment_service.list_model_deployments(USER_ID, PROJECT_ID)
         fetched = model_deployment_service.get_model_deployment(
+            USER_ID,
+            PROJECT_ID,
+            MODEL_DEPLOYMENT_ID,
+        )
+        jobs = model_deployment_service.list_model_deployment_jobs(
             USER_ID,
             PROJECT_ID,
             MODEL_DEPLOYMENT_ID,
@@ -578,6 +585,7 @@ def test_model_deployment_service_create_list_get_commands(monkeypatch, app) -> 
     assert created["deploymentJob"]["job_type"] == "deploy_model"
     assert listed["modelDeployments"][0]["modelDeploymentID"] == MODEL_DEPLOYMENT_ID
     assert fetched["modelDeploymentID"] == MODEL_DEPLOYMENT_ID
+    assert jobs["deploymentJobs"][0]["deploymentJobID"] == JOB_ID
     assert started["deploymentJob"]["job_type"] == "start_model"
     assert stopped["deploymentJob"]["job_type"] == "stop_model"
     assert scaled["modelDeployment"]["replicas"] == 3

@@ -396,6 +396,15 @@ process/pod. Multiple workers should wait until per-model serialization and
 worker heartbeat/lease renewal are implemented, because slow Kubernetes
 operations can otherwise overlap with stale lock recovery.
 
+Local development starts the worker during `make setup-env` with
+`WORKER_DRY_RUN=true`. In dry-run mode the worker still claims
+`deployment_jobs`, checks `desired_generation`, updates `model_deployments`,
+marks jobs `succeeded`/`skipped`/`failed`, and writes `model_events`, but it
+does not call the Kubernetes API. This lets local smoke tests verify the
+control-plane queue without requiring a live Kubernetes cluster. Real local
+Kubernetes runs can set `WORKER_DRY_RUN=false` and provide `KUBECONFIG_DIR` to
+the Docker Compose worker.
+
 The Deployment Worker:
 
 - Polls `deployment_jobs`.

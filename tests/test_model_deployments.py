@@ -177,6 +177,23 @@ def test_get_model_deployment_route(monkeypatch, client, auth_headers) -> None:
     assert response.get_json() == model_deployment_response()
 
 
+def test_list_model_deployment_jobs_route(monkeypatch, client, auth_headers) -> None:
+    expected = {"deploymentJobs": [deployment_job_response()]}
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service."
+        "list_model_deployment_jobs",
+        lambda user_id, project_id, model_deployment_id: expected,
+    )
+
+    response = client.get(
+        f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/jobs",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected
+
+
 @pytest.mark.parametrize(
     ("path_suffix", "method_name", "job_type"),
     [

@@ -84,7 +84,7 @@ def claim_next_job(worker_id: str) -> dict[str, Any] | None:
 
 
 def process_next_job(
-    clients: k8s_client.KubernetesClients,
+    clients: Any,
     *,
     worker_id: str | None = None,
 ) -> JobResult:
@@ -114,7 +114,7 @@ def process_next_job(
 
 
 def process_claimed_job(
-    clients: k8s_client.KubernetesClients,
+    clients: Any,
     job: dict[str, Any],
 ) -> str:
     """Process a job already marked `running` by `claim_next_job`.
@@ -169,12 +169,21 @@ def is_stale_job(job: dict[str, Any], deployment: dict[str, Any]) -> bool:
 
 
 def dispatch_job(
-    clients: k8s_client.KubernetesClients,
+    clients: Any,
     job: dict[str, Any],
     deployment: dict[str, Any],
 ) -> None:
     """Call the Kubernetes operation for a claimed deployment job."""
     job_type = job["job_type"]
+
+    if Config.WORKER_DRY_RUN:
+        logger.info(
+            "Dry-run worker skipped Kubernetes mutation job_id=%s job_type=%s model_deployment_id=%s.",
+            job["deployment_job_id"],
+            job_type,
+            deployment["model_deployment_id"],
+        )
+        return
 
     if job_type == "deploy_model":
         deployment_manager.apply_model_deployment(clients, deployment)
@@ -346,7 +355,7 @@ def truncate_error(message: str, max_length: int = 2000) -> str:
 
 
 def run_forever(
-    clients: k8s_client.KubernetesClients | None = None,
+    clients: Any = None,
     *,
     config: WorkerConfig | None = None,
     should_stop: Callable[[], bool] | None = None,
@@ -356,13 +365,16 @@ def run_forever(
         worker_id=default_worker_id(),
         poll_interval_seconds=Config.WORKER_POLL_INTERVAL_SECONDS,
     )
-    k8s_clients = clients or k8s_client.create_clients()
+    k8s_clients = clients
+    if k8s_clients is None and not Config.WORKER_DRY_RUN:
+        k8s_clients = k8s_client.create_clients()
     should_stop = should_stop or (lambda: False)
 
     logger.info(
-        "Starting deployment worker %s with %.2fs poll interval.",
+        "Starting deployment worker %s with %.2fs poll interval dry_run=%s.",
         worker_config.worker_id,
         worker_config.poll_interval_seconds,
+        Config.WORKER_DRY_RUN,
     )
 
     while not should_stop():

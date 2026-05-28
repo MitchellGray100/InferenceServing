@@ -219,6 +219,7 @@ def test_process_claimed_job_fails_at_max_attempts(monkeypatch) -> None:
 
 def test_dispatch_job_calls_apply_for_deploy_and_start(monkeypatch) -> None:
     calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
     monkeypatch.setattr(
         deployment_worker.deployment_manager,
         "apply_model_deployment",
@@ -233,6 +234,7 @@ def test_dispatch_job_calls_apply_for_deploy_and_start(monkeypatch) -> None:
 
 def test_dispatch_job_calls_scale_for_stop_and_scale(monkeypatch) -> None:
     calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
     monkeypatch.setattr(
         deployment_worker.deployment_manager,
         "scale_model_deployment",
@@ -247,6 +249,7 @@ def test_dispatch_job_calls_scale_for_stop_and_scale(monkeypatch) -> None:
 
 def test_dispatch_job_calls_delete(monkeypatch) -> None:
     calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
     monkeypatch.setattr(
         deployment_worker.deployment_manager,
         "delete_model_deployment",
@@ -256,6 +259,20 @@ def test_dispatch_job_calls_delete(monkeypatch) -> None:
     deployment_worker.dispatch_job(FakeClients(), job_row("delete_model"), deployment_row())
 
     assert calls == ["qwen-small-prod"]
+
+
+def test_dispatch_job_dry_run_skips_kubernetes(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", True)
+    monkeypatch.setattr(
+        deployment_worker.deployment_manager,
+        "apply_model_deployment",
+        lambda clients, deployment: calls.append("apply"),
+    )
+
+    deployment_worker.dispatch_job(FakeClients(), job_row("deploy_model"), deployment_row())
+
+    assert calls == []
 
 
 def test_should_fail_permanently() -> None:

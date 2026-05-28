@@ -98,6 +98,14 @@ WHERE project_id = %(project_id)s
   AND model_deployment_id = %(model_deployment_id)s
   AND deleted_at IS NULL;
 
+-- name: get_model_deployment_by_id_including_deleted
+-- Job history views must still resolve a deployment after delete_model
+-- succeeds, because the delete command itself is part of the durable history.
+SELECT *
+FROM model_deployments
+WHERE project_id = %(project_id)s
+  AND model_deployment_id = %(model_deployment_id)s;
+
 -- name: update_model_deployment_status
 -- Worker-facing status update. This does not advance desired_generation
 -- because it records observed/applied state, not a new user command.

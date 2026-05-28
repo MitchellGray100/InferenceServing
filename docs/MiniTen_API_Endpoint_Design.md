@@ -990,7 +990,7 @@ owner, member
 1. Verify user is project owner or member.
 2. Generate raw API key.
 3. Derive key_prefix from raw key.
-4. Hash raw key.
+4. Hash raw key with server-secret HMAC.
 5. Store key_prefix and key_hash.
 6. Return raw API key once.
 ```
@@ -1000,16 +1000,19 @@ owner, member
 ```json
 {
   "apiKeyID": "1c45e99d-98f7-464a-8b4e-f4c1d8fe6d37",
+  "projectID": "9f943ed3-881e-4f49-b9df-f19eb151c8c1",
   "name": "local-dev",
   "key_prefix": "mt_live_x7k2",
   "api_key": "mt_live_x7k2_8sdf9as7df0qwer...",
-  "created_at": "2026-05-17T12:00:00Z"
+  "created_at": "2026-05-17T12:00:00Z",
+  "last_used_at": null,
+  "revoked_at": null
 }
 ```
 
 ### Important Security Note
 
-The `api_key` field is only returned during creation. It should never be retrievable again.
+The `api_key` field is only returned during creation. It should never be retrievable again. MiniTen stores only `key_prefix` and a server-secret HMAC of the full raw key.
 
 ### Tables used
 

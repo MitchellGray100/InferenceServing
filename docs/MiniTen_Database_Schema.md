@@ -419,7 +419,7 @@ CREATE TABLE api_keys (
   -- Example: "mt_live_abcd"
   key_prefix TEXT NOT NULL,
 
-  -- Hashed full API key. Never store the raw key.
+  -- Server-secret HMAC of the full API key. Never store the raw key.
   key_hash TEXT NOT NULL UNIQUE,
 
   created_by_user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -440,7 +440,7 @@ CREATE TABLE api_keys (
 | `project_id` | `UUID` | Yes | Project this key grants access to. |
 | `name` | `TEXT` | Yes | Human-readable key name. |
 | `key_prefix` | `TEXT` | Yes | Visible prefix shown in dashboard. Not secret. |
-| `key_hash` | `TEXT` | Yes | Hash of the full key. Raw key is never stored. |
+| `key_hash` | `TEXT` | Yes | Server-secret HMAC of the full key. Raw key is never stored. |
 | `created_by_user_id` | `UUID` | Yes | User who created the key. |
 | `created_at` | `TIMESTAMP` | Yes | Time the key was created. |
 | `last_used_at` | `TIMESTAMP` | No | Last time the key was used. |
@@ -818,7 +818,7 @@ Retries should return the same response instead of repeatedly issuing scale oper
 ### Create API Key
 
 ```http
-POST /projects/proj_123/api-keys
+POST /v1/projects/{projectID}/api-keys
 Idempotency-Key: create-local-dev-key-001
 ```
 

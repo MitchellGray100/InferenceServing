@@ -516,15 +516,15 @@ For the MVP, namespace creation can happen during the first model deployment.
 ```text
 User
   ↓
-POST /projects/:project_id/api-keys
+POST /v1/projects/{projectID}/api-keys
   ↓
 Validate project permissions
   ↓
 Generate raw API key
   ↓
-Hash API key
+Hash API key with server-secret HMAC
   ↓
-Store hash and prefix in api_keys
+Store HMAC hash and visible prefix in api_keys
   ↓
 Return raw key once
 ```
@@ -535,7 +535,7 @@ Relevant table:
 api_keys
 ```
 
-Raw API keys are never stored.
+Raw API keys are never stored. MiniTen stores only a visible lookup prefix and a server-secret HMAC of the full raw key.
 
 ---
 
@@ -1162,7 +1162,7 @@ GPU node pools
 
 - API keys are project-scoped.
 - Raw API keys are shown only once.
-- Only API key hashes are stored.
+- Only server-secret API key HMACs are stored.
 - API keys are used for inference requests.
 
 ## Kubernetes

@@ -17,7 +17,10 @@ class Config:
         "DATABASE_URL",
         "postgresql://miniten:miniten@localhost:5432/miniten",
     )
-    API_KEY_HASH_SECRET = os.getenv("API_KEY_HASH_SECRET", "dev")
+    API_KEY_HASH_SECRET = os.getenv(
+        "API_KEY_HASH_SECRET",
+        "dev-api-key-hash-secret-change-me-32-bytes",
+    )
 
     # Kubernetes/vLLM deployment defaults.
     K8S_NAMESPACE_PREFIX = os.getenv("K8S_NAMESPACE_PREFIX", "miniten")

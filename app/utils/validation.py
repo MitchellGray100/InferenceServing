@@ -21,6 +21,7 @@ ROLE_VALUES = {"owner", "member", "viewer"}
 MAX_EMAIL_LENGTH = 254
 MIN_PASSWORD_LENGTH = 8
 MAX_PROJECT_NAME_LENGTH = 120
+MAX_API_KEY_NAME_LENGTH = 80
 MAX_SLUG_LENGTH = 63
 MAX_DEPLOYMENT_NAME_LENGTH = 50
 
@@ -110,6 +111,16 @@ def validate_project_name(value: Any) -> str:
         "name",
         min_length=1,
         max_length=MAX_PROJECT_NAME_LENGTH,
+    )
+
+
+def validate_api_key_name(value: Any) -> str:
+    """Validate a human-readable project API key name."""
+    return validate_string(
+        value,
+        "name",
+        min_length=1,
+        max_length=MAX_API_KEY_NAME_LENGTH,
     )
 
 

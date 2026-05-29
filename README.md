@@ -10,6 +10,8 @@ Docker, Docker Compose, and kind, with a later production path toward OCI/OKE.
 
 ![MiniTen logo](docs/miniten%20logo.png)
 
+![MiniTen system design](docs/MiniTen%20System%20Design.png)
+
 ## What It Does
 
 MiniTen lets you:

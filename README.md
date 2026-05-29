@@ -286,8 +286,10 @@ persisted.
 ![MiniTen completed inference request](docs/CompletedInferenceRequest.png)
 
 The Inference page lets you test a deployed model from the browser with a
-project API key. It sends a non-streaming OpenAI-compatible chat completion
-request and displays the JSON response returned by the model service.
+project API key. It can stream OpenAI-compatible chat completion deltas as they
+arrive while also preserving the full HTTP response for inspection.
+
+![MiniTen streaming inference demo](docs/MinitenStreamingDemo.gif)
 
 ### OpenAI SDK / Notebook Usage
 
@@ -297,6 +299,8 @@ MiniTen can also be called from client code using an OpenAI-compatible base URL.
 The notebook-style workflow uses the project API key, points the SDK at
 `http://127.0.0.1:8000/v1`, and sends requests to the MiniTen model deployment
 name.
+
+![MiniTen Jupyter streaming demo](docs/JupyterStreamingDemo.gif)
 
 ### Account
 
@@ -386,7 +390,7 @@ command reference:
 
   inference chat [--api-key <project-api-key>] [--model <name>]
       [--prompt <text>] [--max-tokens <n>] [--temperature <float>]
-      [--json <json-object>]
+      [--stream] [--json <json-object>]
   inference models [--api-key <project-api-key>]
 
   analytics overview <project-id>
@@ -457,11 +461,22 @@ python -m poetry run miniten inference chat \
   --temperature 0
 ```
 
+Stream inference:
+
+```bash
+python -m poetry run miniten inference chat \
+  --model small-llm \
+  --prompt "Say hello in one short sentence." \
+  --max-tokens 32 \
+  --temperature 0 \
+  --stream
+```
+
 ### OpenAI SDK Compatibility
 
-MiniTen's inference routes are compatible with the OpenAI Python SDK for
-non-streaming chat completions. The `model` value is the MiniTen deployment
-name, not the Hugging Face model ID.
+MiniTen's inference routes are compatible with the OpenAI Python SDK for both
+standard and streaming chat completions. The `model` value is the MiniTen
+deployment name, not the Hugging Face model ID.
 
 Install the SDK if it is not already available:
 
@@ -500,6 +515,25 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)
+```
+
+For token-by-token streaming, pass `stream=True` and iterate over the chunks:
+
+```python
+stream = client.chat.completions.create(
+    model="small-llm",
+    messages=[
+        {"role": "user", "content": "Say hello in one short sentence."},
+    ],
+    max_tokens=64,
+    temperature=0,
+    stream=True,
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)
 ```
 
 You can also run the included compatibility smoke script:
@@ -587,8 +621,24 @@ Content-Type: application/json
 }
 ```
 
-MiniTen currently proxies non-streaming chat completions. Requests with
-`"stream": true` return `streaming_not_supported`.
+MiniTen also proxies streaming chat completions using server-sent events. Add
+`"stream": true` to receive incremental `chat.completion.chunk` responses from
+the deployed model:
+
+```json
+{
+  "model": "small-llm",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say hello in one short sentence."
+    }
+  ],
+  "max_tokens": 32,
+  "temperature": 0,
+  "stream": true
+}
+```
 
 ## Kubernetes Model
 

@@ -18,6 +18,7 @@ from app.k8s.manifests import (
 )
 from app.k8s.names import append_suffix
 from app.security import api_keys
+from app.security import tokens as token_service
 from app.security.tokens import (
     ALGORITHM,
     TOKEN_TYPE,
@@ -25,6 +26,7 @@ from app.security.tokens import (
     current_user_id,
     decode_access_token,
     get_bearer_token,
+    require_existing_user_id,
     unauthorized_error,
 )
 from app.services import auth_service, deployment_worker, project_service, user_service
@@ -211,6 +213,42 @@ def test_current_user_id_returns_g_value(app) -> None:
         g.current_user_id = "user-123"
 
         assert current_user_id() == "user-123"
+
+
+@pytest.mark.real_auth_user_check
+def test_require_existing_user_id_accepts_current_user(monkeypatch) -> None:
+    user_id = "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"
+    fake = FakeTransaction(fetchone={"user_id": user_id})
+    monkeypatch.setattr(token_service, "transaction", fake.transaction)
+
+    assert require_existing_user_id(user_id) == user_id
+
+
+@pytest.mark.real_auth_user_check
+def test_require_existing_user_id_rejects_missing_user(monkeypatch) -> None:
+    fake = FakeTransaction(fetchone=None)
+    monkeypatch.setattr(token_service, "transaction", fake.transaction)
+
+    with pytest.raises(ApiError) as error:
+        require_existing_user_id("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e")
+
+    assert error.value.type == "unauthorized"
+
+
+@pytest.mark.real_auth_user_check
+def test_require_user_auth_rejects_token_for_deleted_user(monkeypatch, app) -> None:
+    fake = FakeTransaction(fetchone=None)
+    monkeypatch.setattr(token_service, "transaction", fake.transaction)
+    with app.app_context():
+        token = create_access_token("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e")
+
+    response = app.test_client().get(
+        "/v1/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.get_json()["error"]["type"] == "unauthorized"
 
 
 def test_decode_access_token_rejects_wrong_type(app) -> None:

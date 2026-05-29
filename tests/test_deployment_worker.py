@@ -276,6 +276,34 @@ def test_dispatch_job_calls_apply_for_deploy_and_start(monkeypatch) -> None:
     assert calls == ["qwen-small-prod", "qwen-small-prod", "qwen-small-prod"]
 
 
+def test_dispatch_job_hard_restart_deletes_then_applies(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
+    monkeypatch.setattr(
+        deployment_worker.deployment_manager,
+        "delete_model_deployment",
+        lambda clients, deployment: calls.append(("delete", deployment["name"])),
+    )
+    monkeypatch.setattr(
+        deployment_worker.deployment_manager,
+        "apply_model_deployment",
+        lambda clients, deployment, hugging_face_token=None: calls.append(
+            ("apply", deployment["name"])
+        ),
+    )
+
+    deployment_worker.dispatch_job(
+        FakeClients(),
+        job_row("hard_restart_model"),
+        deployment_row(),
+    )
+
+    assert calls == [
+        ("delete", "qwen-small-prod"),
+        ("apply", "qwen-small-prod"),
+    ]
+
+
 def test_dispatch_job_sync_status_sets_synced_status(monkeypatch) -> None:
     deployment = deployment_row()
     monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)

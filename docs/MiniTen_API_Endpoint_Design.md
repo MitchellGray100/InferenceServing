@@ -2382,9 +2382,9 @@ POST /v1/chat/completions
 
 Sends chat messages to a deployed model using an OpenAI-compatible request format.
 
-The MVP implementation supports non-streaming responses first. Requests with
-`"stream": true` return `streaming_not_supported` until streaming proxy support
-is added.
+MiniTen supports both standard JSON responses and streaming responses. When
+`"stream": true` is included, MiniTen proxies vLLM's server-sent events back to
+the caller as `text/event-stream`.
 
 Used by:
 
@@ -2475,18 +2475,22 @@ Example shape:
 }
 ```
 
-### Errors
+### Streaming Response
 
-If streaming is requested:
+When `"stream": true` is requested, MiniTen returns incremental
+OpenAI-compatible chat completion chunks as server-sent events:
 
-```json
-{
-  "error": {
-    "type": "streaming_not_supported",
-    "message": "Streaming responses are not supported yet."
-  }
-}
+```text
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Kubernetes"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" manages"},"finish_reason":null}]}
+
+data: [DONE]
 ```
+
+MiniTen records the request as streamed in `inference_requests.streamed`.
+
+### Errors
 
 If model is stopped or otherwise not ready:
 

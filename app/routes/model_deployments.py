@@ -203,6 +203,33 @@ def stop_model_deployment(
     return jsonify(response), status
 
 
+@bp.post("/<project_id>/models/<model_deployment_id>/hard-restart")
+@require_user_auth
+def hard_restart_model_deployment(
+    project_id: str,
+    model_deployment_id: str,
+) -> tuple[object, int]:
+    """Force-delete runtime resources and enqueue deployment recreation."""
+    user_id = current_user_id()
+    response, status = idempotency_service.run_idempotent_control_plane_request(
+        project_id=project_id,
+        user_id=user_id,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+        method=request.method,
+        path=request.path,
+        body={},
+        action=lambda: (
+            model_deployment_service.hard_restart_model_deployment(
+                user_id,
+                project_id,
+                model_deployment_id,
+            ),
+            202,
+        ),
+    )
+    return jsonify(response), status
+
+
 @bp.post("/<project_id>/models/<model_deployment_id>/scale")
 @require_user_auth
 def scale_model_deployment(

@@ -876,7 +876,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_json_arg(update_model)
     add_idempotency_arg(update_model)
     update_model.set_defaults(handler=model_update)
-    for command in ["start", "stop", "sync"]:
+    for command in ["start", "stop", "hard-restart", "sync"]:
         command_parser = models_sub.add_parser(command)
         command_parser.add_argument("project_id")
         command_parser.add_argument("model_id")

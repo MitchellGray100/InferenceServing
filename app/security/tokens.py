@@ -15,8 +15,11 @@ from typing import Any, TypeVar
 import jwt
 from flask import current_app, g, request
 
+from app.db.pool import transaction
+from app.db.sql import load_queries
 from app.utils.errors import ApiError
 from app.utils.time import utc_now
+from app.utils.validation import validate_uuid
 
 
 TOKEN_TYPE = "user_access"
@@ -24,6 +27,7 @@ ALGORITHM = "HS256"
 DEFAULT_ACCESS_TOKEN_TTL = timedelta(hours=8)
 F = TypeVar("F", bound=Callable[..., Any])
 logger = logging.getLogger(__name__)
+queries = load_queries()
 
 
 def create_access_token(
@@ -66,6 +70,29 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def require_existing_user_id(user_id: Any) -> str:
+    """Require that a token subject still maps to a current user row."""
+    try:
+        canonical_user_id = validate_uuid(user_id, "userID")
+    except ApiError as exc:
+        logger.info("Rejected access token with invalid user subject.")
+        raise unauthorized_error() from exc
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("get_user_by_id"),
+                {"user_id": canonical_user_id},
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        logger.info("Rejected access token for missing user_id=%s.", canonical_user_id)
+        raise unauthorized_error()
+
+    return canonical_user_id
+
+
 def get_bearer_token() -> str:
     """Extract the bearer token from the Authorization header."""
     # The API accepts only `Authorization: Bearer <token>` so auth behavior is
@@ -102,7 +129,7 @@ def require_user_auth(view: F) -> F:
         # needed by downstream services.
         token = get_bearer_token()
         payload = decode_access_token(token)
-        g.current_user_id = payload["sub"]
+        g.current_user_id = require_existing_user_id(payload["sub"])
         logger.debug("Authenticated user request user_id=%s.", g.current_user_id)
         return view(*args, **kwargs)
 

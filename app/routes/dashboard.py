@@ -22,7 +22,7 @@ from flask import (
     url_for,
 )
 
-from app.security.tokens import decode_access_token
+from app.security.tokens import decode_access_token, require_existing_user_id
 from app.services import (
     analytics_service,
     api_key_service,
@@ -45,7 +45,7 @@ def current_dashboard_user_id() -> str | None:
     if not token:
         return None
     try:
-        return str(decode_access_token(token)["sub"])
+        return require_existing_user_id(decode_access_token(token)["sub"])
     except ApiError:
         session.clear()
         return None
@@ -445,6 +445,11 @@ def model_command(project_id: str, model_id: str, command: str) -> Any:
             model_id,
         ),
         "stop": lambda: model_deployment_service.stop_model_deployment(
+            user_id(),
+            project_id,
+            model_id,
+        ),
+        "hard-restart": lambda: model_deployment_service.hard_restart_model_deployment(
             user_id(),
             project_id,
             model_id,

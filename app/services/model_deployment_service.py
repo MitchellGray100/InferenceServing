@@ -47,6 +47,7 @@ JOB_TYPES = {
     "update": "update_model",
     "start": "start_model",
     "stop": "stop_model",
+    "hard_restart": "hard_restart_model",
     "scale": "scale_model",
     "delete": "delete_model",
 }
@@ -142,7 +143,10 @@ def create_model_deployment(
                     )
                     raise ApiError(
                         type="validation_error",
-                        message="A model deployment with that name already exists.",
+                        message=(
+                            f"A model deployment named {spec['name']} already exists. "
+                            "Start it, update it, or delete it first."
+                        ),
                         status_code=409,
                     ) from exc
                 raise
@@ -403,17 +407,34 @@ def stop_model_deployment(
     )
 
 
+def hard_restart_model_deployment(
+    user_id: Any,
+    project_id: Any,
+    model_deployment_id: Any,
+) -> dict[str, Any]:
+    """Force-delete Kubernetes runtime resources and recreate the deployment."""
+    return lifecycle_command(
+        user_id,
+        project_id,
+        model_deployment_id,
+        job_type=JOB_TYPES["hard_restart"],
+        requested_status="deploying",
+        payload_extra={"force_recreate": True},
+    )
+
+
 def scale_model_deployment(
     user_id: Any,
     project_id: Any,
     model_deployment_id: Any,
     replicas: Any,
 ) -> dict[str, Any]:
-    """Update desired replicas and enqueue scale work.
+    """Update desired replicas and enqueue scale work for fixed-size deployments.
 
     `replicas = 0` is allowed so stop-like behavior can be represented as a
     scale request if the UI or CLI needs that later. The stop endpoint still
     exists because autoscaling-aware shutdown may require worker-specific logic.
+    Manual replica scaling is rejected when HPA autoscaling is enabled.
     """
     desired_replicas = validate_positive_int(
         replicas,
@@ -442,6 +463,17 @@ def scale_model_deployment(
                     canonical_project_id,
                 )
                 raise model_deployment_not_found_error()
+            if deployment["autoscaling_enabled"]:
+                logger.info(
+                    "Manual scale rejected for autoscaled model_deployment_id=%s project_id=%s.",
+                    canonical_model_deployment_id,
+                    canonical_project_id,
+                )
+                raise ApiError(
+                    "manual_scale_disabled",
+                    "Disable autoscaling before manually scaling replicas.",
+                    409,
+                )
 
             previous_replicas = int(deployment["replicas"])
             if desired_replicas != previous_replicas:

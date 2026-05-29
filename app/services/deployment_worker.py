@@ -36,6 +36,7 @@ SUCCESS_EVENT_TYPES = {
     "update_model": "model_updated",
     "start_model": "model_started",
     "stop_model": "model_stopped",
+    "hard_restart_model": "model_started",
     "scale_model": "model_scaled",
     "delete_model": "model_deleted",
     "sync_status": "model_status_synced",
@@ -45,11 +46,17 @@ SUCCESS_MESSAGES = {
     "update_model": "Model deployment settings applied to Kubernetes.",
     "start_model": "Model deployment started.",
     "stop_model": "Model deployment stopped.",
+    "hard_restart_model": "Model deployment hard restarted.",
     "scale_model": "Model deployment scaled.",
     "delete_model": "Model deployment deleted.",
     "sync_status": "Model deployment status reconciled from Kubernetes.",
 }
-RUNNING_STATUSES = {"deploy_model": "running", "update_model": "running", "start_model": "running"}
+RUNNING_STATUSES = {
+    "deploy_model": "running",
+    "update_model": "running",
+    "start_model": "running",
+    "hard_restart_model": "running",
+}
 STOPPED_STATUSES = {"stop_model": "stopped"}
 SKIPPED_STATUS = "skipped"
 
@@ -252,6 +259,15 @@ def dispatch_job(
         return
 
     if job_type == "start_model":
+        deployment_manager.apply_model_deployment(
+            clients,
+            deployment,
+            hugging_face_token=Config.HUGGING_FACE_TOKEN,
+        )
+        return
+
+    if job_type == "hard_restart_model":
+        deployment_manager.delete_model_deployment(clients, deployment)
         deployment_manager.apply_model_deployment(
             clients,
             deployment,

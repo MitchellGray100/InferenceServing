@@ -140,14 +140,12 @@ WHERE model_deployment_id = %(model_deployment_id)s
 RETURNING *;
 
 -- name: advance_model_deployment_delete_requested
--- Delete requests should immediately hide the model and release the
--- project-local name. The worker still fetches the row including deleted rows
--- so it can remove Kubernetes resources asynchronously.
+-- Delete requests should reserve the project-local name while Kubernetes
+-- cleanup is pending. The worker releases the name by marking the deployment
+-- deleted after resources are removed.
 UPDATE model_deployments
 SET
   status = 'deleting',
-  name = name || '-deleted-' || LEFT(model_deployment_id::text, 8),
-  deleted_at = CURRENT_TIMESTAMP,
   desired_generation = desired_generation + 1,
   updated_at = CURRENT_TIMESTAMP
 WHERE model_deployment_id = %(model_deployment_id)s

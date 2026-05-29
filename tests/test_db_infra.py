@@ -73,6 +73,49 @@ def test_schema_enforces_and_names_unique_api_key_hash() -> None:
     assert "WHERE revoked_at IS NULL" in api_key_name_migration
 
 
+def test_model_deployment_names_are_reserved_until_worker_marks_deleted() -> None:
+    """Deleting reserves a model name until Kubernetes cleanup completes."""
+    initial_schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+    deployment_queries = (
+        migrate.project_root() / "app" / "db" / "queries" / "model_deployments.sql"
+    ).read_text(
+        encoding="utf-8"
+    )
+    delete_requested = deployment_queries.split(
+        "-- name: advance_model_deployment_delete_requested",
+        maxsplit=1,
+    )[1].split("-- name: advance_model_deployment_replicas", maxsplit=1)[0]
+    mark_deleted = deployment_queries.split(
+        "-- name: mark_model_deployment_deleted",
+        maxsplit=1,
+    )[1]
+
+    assert "CREATE UNIQUE INDEX uq_model_deployments_active_project_name" in initial_schema
+    assert "WHERE deleted_at IS NULL" in initial_schema
+    assert "status = 'deleting'" in delete_requested
+    assert "deleted_at = CURRENT_TIMESTAMP" not in delete_requested
+    assert "name = name || '-deleted-'" not in delete_requested
+    assert "status = 'deleted'" in mark_deleted
+    assert "deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP)" in mark_deleted
+
+
+def test_hard_restart_job_type_is_allowed_by_schema_and_migration() -> None:
+    initial_schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+    hard_restart_migration = (
+        migrate.migrations_dir() / "004_hard_restart_deployment_jobs.sql"
+    ).read_text(
+        encoding="utf-8"
+    )
+
+    assert "'hard_restart_model'" in initial_schema
+    assert "DROP CONSTRAINT IF EXISTS deployment_jobs_job_type_check" in hard_restart_migration
+    assert "'hard_restart_model'" in hard_restart_migration
+
+
 def test_get_applied_migrations_creates_table_and_returns_mapping() -> None:
     conn = FakeMigrationConnection(fetchall=[("001.sql", "abc")])
 

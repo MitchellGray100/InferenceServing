@@ -208,6 +208,7 @@ CREATE TABLE deployment_jobs (
     'update_model',
     'start_model',
     'stop_model',
+    'hard_restart_model',
     'scale_model',
     'delete_model',
     'sync_status'

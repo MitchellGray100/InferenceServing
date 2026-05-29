@@ -29,9 +29,16 @@
       <button type="submit">{{ command|capitalize }}</button>
     </form>
   {% endfor %}
+  <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='hard-restart') }}" data-confirm={{ ('Hard restart model ' ~ model.name ~ '? This force deletes Kubernetes runtime resources and recreates the deployment.')|tojson }}>
+    <button class="danger" type="submit">Hard restart</button>
+  </form>
+  {% set autoscaling_enabled = model.autoscaling.enabled %}
   <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='scale') }}" class="inline-form">
-    <input name="replicas" type="number" min="0" value="{{ model.replicas }}" aria-label="Replicas">
-    <button type="submit">Scale</button>
+    <input name="replicas" type="number" min="0" value="{{ model.replicas }}" aria-label="Replicas" {% if autoscaling_enabled %}disabled title="Autoscaling manages replicas"{% endif %}>
+    <button type="submit" {% if autoscaling_enabled %}disabled title="Disable autoscaling before manually scaling replicas."{% endif %}>Scale</button>
+    {% if autoscaling_enabled %}
+      <span class="muted">Autoscaling manages replicas.</span>
+    {% endif %}
   </form>
   <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='delete') }}" data-confirm={{ ('Delete model ' ~ model.name ~ '? This queues Kubernetes cleanup and cannot be undone.')|tojson }}>
     <button class="danger" type="submit">Delete</button>

@@ -780,6 +780,71 @@ def test_model_scale_noop_queues_skipped_worker_job_without_generation_advance(
     assert all("replicas" not in params for _, params in fake.cursor.executed)
 
 
+def test_model_scale_rejects_autoscaled_deployments(monkeypatch, app) -> None:
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "member"},
+            deployment_row(autoscaling_enabled=True, min_replicas=1, max_replicas=3),
+        ],
+    )
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    def enqueue_job(*args, **kwargs):
+        raise AssertionError("autoscaled deployments should not enqueue manual scale jobs")
+
+    monkeypatch.setattr(
+        model_deployment_service,
+        "enqueue_deployment_job_with_cursor",
+        enqueue_job,
+    )
+
+    with app.app_context(), pytest.raises(ApiError) as error:
+        model_deployment_service.scale_model_deployment(
+            USER_ID,
+            PROJECT_ID,
+            MODEL_DEPLOYMENT_ID,
+            2,
+        )
+
+    assert error.value.type == "manual_scale_disabled"
+    assert error.value.status_code == 409
+    assert all("replicas" not in (params or {}) for _, params in fake.cursor.executed)
+
+
+def test_model_hard_restart_enqueues_force_recreate_job(monkeypatch, app) -> None:
+    queued_payloads = []
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "member"},
+            deployment_row(status="running"),
+            deployment_row(status="deploying"),
+        ],
+    )
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    def enqueue_job(cur, project_id, model_deployment_id, job_type, payload):
+        queued_payloads.append(payload)
+        return job_row(job_type=job_type)
+
+    monkeypatch.setattr(
+        model_deployment_service,
+        "enqueue_deployment_job_with_cursor",
+        enqueue_job,
+    )
+
+    with app.app_context():
+        restarted = model_deployment_service.hard_restart_model_deployment(
+            USER_ID,
+            PROJECT_ID,
+            MODEL_DEPLOYMENT_ID,
+        )
+
+    assert restarted["modelDeployment"]["status"] == "deploying"
+    assert restarted["deploymentJob"]["job_type"] == "hard_restart_model"
+    assert queued_payloads[0]["force_recreate"] is True
+    assert queued_payloads[0]["previous_status"] == "running"
+
+
 def test_model_deployment_service_error_branches(monkeypatch, app) -> None:
     fake = FakeTransaction(
         fetchones=[
@@ -816,6 +881,10 @@ def test_model_deployment_service_error_branches(monkeypatch, app) -> None:
         )
 
     assert duplicate.value.status_code == 409
+    assert duplicate.value.message == (
+        "A model deployment named qwen-small-prod already exists. "
+        "Start it, update it, or delete it first."
+    )
     assert scale_missing.value.type == "model_deployment_not_found"
     assert lifecycle_missing.value.type == "model_deployment_not_found"
 

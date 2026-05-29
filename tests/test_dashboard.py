@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app import create_app
 from app.security.tokens import create_access_token
 from app.utils.errors import ApiError
@@ -267,6 +269,28 @@ def test_stale_dashboard_session_redirects_to_login(monkeypatch):
         assert "access_token" not in session
 
 
+@pytest.mark.real_auth_user_check
+def test_deleted_user_dashboard_session_is_cleared(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+
+    def missing_user_from_token(user_id):
+        raise ApiError("unauthorized", "Missing or invalid access token.", 401)
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.require_existing_user_id",
+        missing_user_from_token,
+    )
+
+    response = client.get("/projects")
+
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+    with client.session_transaction() as session:
+        assert "access_token" not in session
+
+
 def test_dashboard_api_error_renders_error_page(monkeypatch):
     app = make_app()
     client = app.test_client()
@@ -389,6 +413,9 @@ def test_model_detail_delete_requires_confirmation_and_failed_retry(monkeypatch)
     assert b'data-auto-sync-interval-ms="120000"' in response.data
     assert b"Refresh jobs and status" in response.data
     assert b"&#8635;" in response.data
+    assert b'aria-label="Replicas" disabled title="Autoscaling manages replicas"' in response.data
+    assert b"Disable autoscaling before manually scaling replicas." in response.data
+    assert b"Autoscaling manages replicas." in response.data
 
 
 def test_api_key_created_page_has_copy_button(monkeypatch):
@@ -486,6 +513,59 @@ def test_model_retry_command_uses_start_service(monkeypatch):
 
     response = client.post(
         f"/projects/{project()['projectID']}/models/{model()['modelDeploymentID']}/retry",
+    )
+
+    assert response.status_code == 302
+    assert calls == [
+        {
+            "project_id": project()["projectID"],
+            "model_id": model()["modelDeploymentID"],
+        }
+    ]
+
+
+def test_model_hard_restart_requires_confirmation_and_calls_service(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    calls = []
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.get_model_deployment",
+        lambda user_id, project_id, model_id: model(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.list_model_deployment_jobs",
+        lambda user_id, project_id, model_id: {"deploymentJobs": []},
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.get_model_deployment_status",
+        lambda user_id, project_id, model_id: {"kubernetes": {}},
+    )
+
+    response = client.get(
+        f"/projects/{project()['projectID']}/models/{model()['modelDeploymentID']}"
+    )
+
+    assert response.status_code == 200
+    assert b"Hard restart" in response.data
+    assert b"force deletes Kubernetes runtime resources" in response.data
+
+    def fake_hard_restart(user_id, project_id, model_id):
+        calls.append({"project_id": project_id, "model_id": model_id})
+        return {}
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.hard_restart_model_deployment",
+        fake_hard_restart,
+    )
+
+    response = client.post(
+        f"/projects/{project()['projectID']}/models/{model()['modelDeploymentID']}/hard-restart",
     )
 
     assert response.status_code == 302

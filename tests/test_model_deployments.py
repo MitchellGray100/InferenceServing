@@ -369,6 +369,7 @@ def test_parse_log_tail_rejects_bad_values() -> None:
     [
         ("start", "start_model_deployment", "start_model"),
         ("stop", "stop_model_deployment", "stop_model"),
+        ("hard-restart", "hard_restart_model_deployment", "hard_restart_model"),
     ],
 )
 def test_lifecycle_command_routes(

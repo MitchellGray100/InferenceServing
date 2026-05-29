@@ -79,6 +79,14 @@ button:hover,
   text-decoration: none;
 }
 
+button:disabled,
+button:disabled:hover {
+  background: #151915;
+  border-color: var(--line);
+  color: #667064;
+  cursor: not-allowed;
+}
+
 .secondary,
 .ghost {
   background: #111711;

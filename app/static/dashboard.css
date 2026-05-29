@@ -1,15 +1,17 @@
 :root {
-  color-scheme: light;
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --ink: #18202a;
-  --muted: #687385;
-  --line: #d9dee7;
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --danger: #b91c1c;
-  --success: #047857;
-  --warning: #a16207;
+  color-scheme: dark;
+  --bg: #070907;
+  --surface: #101410;
+  --surface-raised: #151b15;
+  --ink: #f1f7ef;
+  --muted: #a2ae9d;
+  --line: #2a3329;
+  --accent: #19e76e;
+  --accent-strong: #ffa9fd;
+  --accent-ink: #071008;
+  --danger: #ff6b8a;
+  --success: #19e76e;
+  --warning: #f4d35e;
 }
 
 * {
@@ -26,7 +28,7 @@ body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-strong);
   text-decoration: none;
 }
 
@@ -57,7 +59,7 @@ button,
   background: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 6px;
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
   display: inline-flex;
   font: inherit;
@@ -72,19 +74,23 @@ button,
 button:hover,
 .button:hover {
   background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #170616;
   text-decoration: none;
 }
 
 .secondary,
 .ghost {
-  background: #fff;
+  background: #111711;
   border-color: var(--line);
   color: var(--ink);
 }
 
 .secondary:hover,
 .ghost:hover {
-  background: #eef2f7;
+  background: #1b241b;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .danger {
@@ -100,7 +106,7 @@ button:hover,
 input,
 select,
 textarea {
-  background: #fff;
+  background: #0b100c;
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--ink);
@@ -113,9 +119,17 @@ textarea {
 input:disabled,
 select:disabled,
 textarea:disabled {
-  background: #eef2f7;
-  color: var(--muted);
+  background: #151915;
+  color: #667064;
   cursor: not-allowed;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(25 231 110 / 16%);
+  outline: none;
 }
 
 .field-disabled {
@@ -155,9 +169,10 @@ th {
 }
 
 pre {
-  background: #101827;
+  background: #050705;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  color: #e5edf7;
+  color: var(--ink);
   overflow: auto;
   padding: 14px;
   white-space: pre-wrap;
@@ -165,7 +180,7 @@ pre {
 
 .topbar {
   align-items: center;
-  background: #fff;
+  background: #090d09;
   border-bottom: 1px solid var(--line);
   display: flex;
   gap: 18px;
@@ -177,9 +192,19 @@ pre {
 }
 
 .brand {
+  align-items: center;
   color: var(--ink);
+  display: inline-flex;
   font-size: 18px;
   font-weight: 800;
+  min-height: 38px;
+}
+
+.brand img {
+  display: block;
+  height: 34px;
+  object-fit: contain;
+  width: auto;
 }
 
 .nav {
@@ -317,7 +342,7 @@ pre {
 }
 
 .stats div {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 16px;
@@ -346,7 +371,7 @@ pre {
 
 .message {
   align-items: center;
-  background: #fff;
+  background: var(--surface-raised);
   border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
   border-radius: 6px;
@@ -383,7 +408,7 @@ pre {
 
 .confirm-backdrop {
   align-items: center;
-  background: rgb(24 32 42 / 45%);
+  background: rgb(0 0 0 / 68%);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -396,7 +421,7 @@ pre {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 18px 45px rgb(24 32 42 / 24%);
+  box-shadow: 0 18px 55px rgb(0 0 0 / 48%);
   max-width: 440px;
   padding: 22px;
   width: 100%;
@@ -411,7 +436,7 @@ pre {
 }
 
 .status {
-  background: #eef2f7;
+  background: #1b241b;
   border-radius: 999px;
   display: inline-flex;
   font-size: 12px;
@@ -420,13 +445,13 @@ pre {
 }
 
 .status-active {
-  background: #dcfce7;
+  background: rgb(25 231 110 / 16%);
   color: var(--success);
 }
 
 .status-revoked {
-  background: #fee2e2;
-  color: var(--danger);
+  background: rgb(255 169 253 / 16%);
+  color: var(--accent-strong);
 }
 
 .table-section,

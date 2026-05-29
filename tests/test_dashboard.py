@@ -195,6 +195,8 @@ def test_projects_page_lists_projects(monkeypatch):
 
     assert response.status_code == 200
     assert b"Personal Models" in response.data
+    assert b"miniten-logo.png" in response.data
+    assert b'aria-label="MiniTen home"' in response.data
     assert b"Delete account" in response.data
     assert b'data-confirm="Delete your MiniTen account? This cannot be undone."' in response.data
 

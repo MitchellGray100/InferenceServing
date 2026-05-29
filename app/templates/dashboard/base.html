@@ -9,7 +9,9 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="{{ url_for('dashboard.index') }}">MiniTen</a>
+      <a class="brand" href="{{ url_for('dashboard.index') }}" aria-label="MiniTen home">
+        <img src="{{ url_for('static', filename='miniten-logo.png') }}" alt="MiniTen">
+      </a>
       <nav class="nav">
         <a href="{{ url_for('dashboard.projects') }}">Projects</a>
         <a href="{{ url_for('dashboard.inference') }}">Inference</a>

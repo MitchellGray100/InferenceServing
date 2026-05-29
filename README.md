@@ -39,11 +39,32 @@ Install these before running the project locally:
 - `kubectl`
 - `make`
 
-On Windows, the easiest way to install Kubernetes tools is:
+Package manager examples:
+
+macOS with Homebrew:
+
+```bash
+brew install python@3.12 docker docker-compose kind kubectl make
+```
+
+Windows with Chocolatey:
 
 ```powershell
-winget install --id Kubernetes.kind --exact
-winget install --id Kubernetes.kubectl --exact
+choco install python docker-desktop docker-compose kubernetes-cli kind make -y
+```
+
+Debian/Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip make ca-certificates curl
+
+# Docker Engine: https://docs.docker.com/engine/install/ubuntu/
+# kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+# kind:
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin/kind
 ```
 
 ## Quick Start: Web Dashboard
@@ -335,6 +356,68 @@ python -m poetry run miniten inference chat \
   --prompt "Say hello in one short sentence." \
   --max-tokens 32 \
   --temperature 0
+```
+
+### OpenAI SDK Compatibility
+
+MiniTen's inference routes are compatible with the OpenAI Python SDK for
+non-streaming chat completions. The `model` value is the MiniTen deployment
+name, not the Hugging Face model ID.
+
+Install the SDK if it is not already available:
+
+```bash
+python -m poetry add openai
+```
+
+Then call MiniTen like an OpenAI-compatible endpoint:
+
+```python
+from openai import OpenAI
+import os
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key=os.environ["MINITEN_PROJECT_API_KEY"],
+)
+
+response = client.chat.completions.create(
+    model="small-llm",
+    messages=[
+        {"role": "system", "content": "You are a concise technical writer."},
+        {"role": "user", "content": "What is gradient descent?"},
+        {
+            "role": "assistant",
+            "content": (
+                "An optimization algorithm that iteratively adjusts model "
+                "parameters by moving in the direction of steepest decrease "
+                "in the loss function."
+            ),
+        },
+        {"role": "user", "content": "How does the learning rate affect it?"},
+    ],
+    max_tokens=64,
+    temperature=0,
+)
+
+print(response.choices[0].message.content)
+```
+
+You can also run the included compatibility smoke script:
+
+```bash
+export MINITEN_PROJECT_API_KEY="mt_live_..."
+export MINITEN_MODEL="small-llm"
+
+python -m poetry run python scripts/test_openai_sdk_chat.py
+```
+
+Or pass values directly:
+
+```bash
+python -m poetry run python scripts/test_openai_sdk_chat.py \
+  --api-key "mt_live_..." \
+  --model "small-llm"
 ```
 
 Lifecycle commands:

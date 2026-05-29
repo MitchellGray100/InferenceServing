@@ -4,7 +4,7 @@
 <section class="page-heading">
   <div><p class="eyebrow">Logs</p><h1>{{ model_name }}</h1></div>
   <div class="actions">
-    <a class="button secondary" href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}">Back to project</a>
+    <a class="button secondary" href="{{ url_for('dashboard.model_detail', project_id=project.projectID, model_id=model.modelDeploymentID) }}">Back to model</a>
     <form method="get" class="inline-form">
       <input name="tail" type="number" min="1" max="1000" placeholder="200">
       <button type="submit">Refresh</button>
@@ -14,7 +14,7 @@
 {% for pod in logs %}
   <section class="panel">
     <h2>{{ pod.pod }}</h2>
-    <pre>{{ pod.logs }}</pre>
+    <pre>{{ pod.text }}</pre>
   </section>
 {% else %}
   <section class="panel empty">No logs returned.</section>

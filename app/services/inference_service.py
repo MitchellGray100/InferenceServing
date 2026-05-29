@@ -12,6 +12,7 @@ import logging
 import socket
 import subprocess
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import requests
@@ -38,14 +39,10 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
     data = require_json_object(body)
     model_name = validate_string(require_field(data, "model"), "model")
 
-    # TODO: Support streaming
-    # Streaming requires a different HTTP response shape and connection
-    # handling, so the first MVP pass rejects it explicitly.
     if data.get("stream") is True:
-        logger.info("Rejected streaming inference request model=%s.", model_name)
         raise ApiError(
-            type="streaming_not_supported",
-            message="Streaming responses are not supported yet.",
+            type="validation_error",
+            message="Use the streaming chat completions proxy for stream=true requests.",
             status_code=400,
         )
 
@@ -148,6 +145,109 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
             status_code,
             latency_ms,
         )
+
+
+def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes], int]:
+    """Proxy an OpenAI-compatible streaming chat completion request."""
+    data = require_json_object(body)
+    model_name = validate_string(require_field(data, "model"), "model")
+    if data.get("stream") is not True:
+        raise ApiError(
+            type="validation_error",
+            message="stream must be true for streaming chat completions.",
+            status_code=400,
+        )
+
+    identity = api_key_service.authenticate_project_api_key(raw_api_key)
+    deployment = get_deployment_for_inference(identity["projectID"], model_name)
+    ensure_deployment_running(deployment)
+
+    url = build_vllm_url(deployment, CHAT_COMPLETIONS_PATH)
+    started = time.perf_counter()
+    status_code = 502
+    error_type: str | None = None
+    port_forward_context = contextlib.ExitStack()
+
+    try:
+        port_forward_context.enter_context(maybe_local_port_forward(deployment))
+        upstream_response = requests.post(
+            url,
+            json=data,
+            timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
+            stream=True,
+        )
+        status_code = upstream_response.status_code
+        error_type = classify_upstream_status(status_code)
+    except requests.Timeout as exc:
+        port_forward_context.close()
+        status_code = 504
+        error_type = "upstream_timeout"
+        record_streaming_inference_request(
+            identity,
+            deployment,
+            started,
+            status_code=status_code,
+            error_type=error_type,
+        )
+        raise ApiError(
+            type="upstream_timeout",
+            message="Timed out waiting for model response.",
+            status_code=504,
+        ) from exc
+    except requests.RequestException as exc:
+        port_forward_context.close()
+        error_type = "upstream_error"
+        record_streaming_inference_request(
+            identity,
+            deployment,
+            started,
+            status_code=status_code,
+            error_type=error_type,
+        )
+        raise ApiError(
+            type="upstream_error",
+            message=upstream_request_failed_message(deployment),
+            status_code=502,
+        ) from exc
+
+    def generate() -> Iterator[bytes]:
+        nonlocal error_type
+        try:
+            for chunk in upstream_response.iter_content(chunk_size=None):
+                if chunk:
+                    yield chunk
+        except requests.RequestException as exc:
+            error_type = "upstream_error"
+            logger.warning(
+                "Streaming inference upstream interrupted project_id=%s model=%s error=%s.",
+                identity["projectID"],
+                model_name,
+                exc.__class__.__name__,
+            )
+        finally:
+            upstream_response.close()
+            port_forward_context.close()
+            record_streaming_inference_request(
+                identity,
+                deployment,
+                started,
+                status_code=status_code,
+                error_type=error_type,
+            )
+
+    logger.info(
+        "Streaming inference request project_id=%s model_deployment_id=%s model=%s status=%s.",
+        identity["projectID"],
+        deployment["model_deployment_id"],
+        model_name,
+        status_code,
+    )
+    return generate(), status_code
+
+
+def is_streaming_chat_request(body: Any) -> bool:
+    """Return whether a chat completion request asks for SSE streaming."""
+    return isinstance(body, dict) and body.get("stream") is True
 
 
 def list_models(raw_api_key: str) -> dict[str, Any]:
@@ -371,6 +471,30 @@ def record_inference_request(
                     "streamed": streamed,
                 },
             )
+
+
+def record_streaming_inference_request(
+    identity: dict[str, Any],
+    deployment: dict[str, Any],
+    started: float,
+    *,
+    status_code: int,
+    error_type: str | None,
+) -> None:
+    """Record metadata for a streaming request when the stream closes."""
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    record_inference_request(
+        project_id=identity["projectID"],
+        model_deployment_id=deployment["model_deployment_id"],
+        api_key_id=identity["apiKeyID"],
+        api_key_prefix=identity.get("apiKeyPrefix"),
+        status_code=status_code,
+        latency_ms=latency_ms,
+        error_type=error_type,
+        request_path=CHAT_COMPLETIONS_PATH,
+        method="POST",
+        streamed=True,
+    )
 
 
 def serialize_openai_model(row: dict[str, Any]) -> dict[str, Any]:

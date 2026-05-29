@@ -501,6 +501,7 @@ def model_logs(project_id: str, model_name: str) -> Any:
     return render_template(
         "dashboard/model_logs.html",
         project=project_service.get_project(current, project_id),
+        model=logs["model"],
         project_id=project_id,
         model_name=model_name,
         logs=logs["logs"],

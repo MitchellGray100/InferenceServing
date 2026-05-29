@@ -11,7 +11,7 @@
     through a temporary <code>kubectl port-forward</code> when needed.
   </p>
 </section>
-<form method="post" class="settings-form" autocomplete="off">
+<form method="post" class="settings-form" autocomplete="off" data-inference-stream-form data-inference-url="{{ url_for('inference.chat_completions') }}">
   <section class="panel">
     <div class="form-grid">
       <label>Project API key <input name="api_key" type="text" value="{{ form.api_key }}" required autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true"></label>
@@ -20,12 +20,23 @@
       <label>Temperature <input name="temperature" type="number" step="0.1" min="0" value="{{ form.temperature }}"></label>
     </div>
     <label>Prompt <textarea name="prompt" rows="5" required>{{ form.prompt }}</textarea></label>
-    <button type="submit">Send</button>
+    <button type="submit" data-inference-submit>Stream response</button>
   </section>
 </form>
+<section class="panel" data-inference-output-panel hidden>
+  <div class="section-heading compact">
+    <h2>Streaming response</h2>
+    <span class="muted" data-inference-status></span>
+  </div>
+  <pre class="stream-output" data-inference-output></pre>
+</section>
+<section class="panel" data-inference-full-panel hidden>
+  <h2>Full HTTP response</h2>
+  <pre class="stream-output" data-inference-full-output></pre>
+</section>
 {% if response %}
   <section class="panel">
-    <h2>Response</h2>
+    <h2>Full HTTP response</h2>
     <pre>{{ response | tojson(indent=2) }}</pre>
   </section>
 {% endif %}

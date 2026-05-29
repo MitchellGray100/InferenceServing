@@ -581,7 +581,7 @@ def test_model_analytics_has_back_to_project_button(monkeypatch):
     assert b"POST /v1/chat/completions" in response.data
 
 
-def test_model_logs_has_back_to_project_button(monkeypatch):
+def test_model_logs_has_back_to_model_button(monkeypatch):
     app = make_app()
     client = app.test_client()
     login(client, app)
@@ -591,14 +591,21 @@ def test_model_logs_has_back_to_project_button(monkeypatch):
     )
     monkeypatch.setattr(
         "app.routes.dashboard.model_deployment_service.list_model_logs",
-        lambda user_id, project_id, model_name, tail: {"logs": []},
+        lambda user_id, project_id, model_name, tail: {
+            "model": model(),
+            "logs": [{"pod": "qwen-pod", "text": "ready"}],
+        },
     )
 
     response = client.get(f"/projects/{project()['projectID']}/models/qwen/logs")
 
     assert response.status_code == 200
-    assert b"Back to project" in response.data
-    assert f'href="/projects/{project()["projectID"]}"'.encode() in response.data
+    assert b"Back to model" in response.data
+    assert (
+        f'href="/projects/{project()["projectID"]}/models/{model()["modelDeploymentID"]}"'.encode()
+        in response.data
+    )
+    assert b"ready" in response.data
 
 
 def test_inference_page_posts_chat_completion(monkeypatch):
@@ -636,3 +643,7 @@ def test_inference_page_posts_chat_completion(monkeypatch):
     assert b"Say hello</textarea>" in response.data
     assert b'autocomplete="off"' in response.data
     assert b'type="password"' not in response.data
+    assert b"data-inference-stream-form" in response.data
+    assert b"data-inference-output" in response.data
+    assert b"data-inference-full-output" in response.data
+    assert b"Full HTTP response" in response.data

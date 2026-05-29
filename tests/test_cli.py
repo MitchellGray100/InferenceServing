@@ -16,6 +16,13 @@ class FakeResponse:
     def json(self):
         return self._body
 
+    def iter_content(self, chunk_size=None, decode_unicode=False):
+        chunks = [self.text]
+        yield from chunks
+
+    def close(self):
+        pass
+
 
 @pytest.fixture
 def cli_config(monkeypatch, tmp_path):
@@ -161,6 +168,45 @@ def test_inference_chat_uses_project_api_key(cli_config, calls):
     assert calls[0]["url"] == "http://127.0.0.1:8000/v1/chat/completions"
     assert calls[0]["headers"]["Authorization"] == "Bearer project-key"
     assert calls[0]["json"]["messages"] == [{"role": "user", "content": "Say hello"}]
+
+
+def test_inference_chat_stream_prints_deltas(cli_config, monkeypatch, capsys):
+    write_config(cli_config, project_api_key="project-key")
+    calls = []
+
+    class StreamingResponse(FakeResponse):
+        def __init__(self):
+            super().__init__(200, None)
+            self.text = ""
+
+        def iter_content(self, chunk_size=None, decode_unicode=False):
+            yield 'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+            yield 'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+    def fake_request(self, method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        return StreamingResponse()
+
+    monkeypatch.setattr(cli.requests.Session, "request", fake_request)
+
+    exit_code = cli.main(
+        [
+            "inference",
+            "chat",
+            "--model",
+            "qwen",
+            "--prompt",
+            "Say hello",
+            "--stream",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls[0]["stream"] is True
+    assert calls[0]["headers"]["Accept"] == "text/event-stream"
+    assert calls[0]["json"]["stream"] is True
+    assert capsys.readouterr().out == "Hello\n"
 
 
 def test_inference_requires_project_api_key(cli_config, capsys):

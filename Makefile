@@ -9,6 +9,7 @@ install:
 
 setup-env: install
 	$(POETRY) run python scripts/local_env_guard.py assert-api-not-running
+	$(POETRY) run python scripts/local_env_guard.py assert-docker-ready
 	docker compose up -d postgres
 	$(POETRY) run python scripts/wait_for_postgres.py
 	$(POETRY) run python -m app.db.migrate

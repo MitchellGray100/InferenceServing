@@ -183,6 +183,11 @@ pre {
   overflow: auto;
 }
 
+.stream-output {
+  min-height: 180px;
+  max-height: 520px;
+}
+
 .topbar {
   align-items: center;
   background: #090d09;

@@ -1,12 +1,12 @@
 """OpenAI-compatible inference routes.
 
 Inference routes use project API keys, resolve `request.body.model` as the
-project-local deployment name, and proxy non-streaming requests to vLLM.
+project-local deployment name, and proxy requests to vLLM.
 """
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from app.services import inference_service
 
@@ -15,14 +15,31 @@ bp = Blueprint("inference", __name__, url_prefix="/v1")
 
 
 @bp.post("/chat/completions")
-def chat_completions() -> tuple[object, int]:
-    """Proxy a non-streaming chat completion request to vLLM."""
+def chat_completions() -> object:
+    """Proxy a chat completion request to vLLM."""
     # Inference uses project API keys instead of user dashboard tokens. The key
     # determines the project, and the request body's `model` selects the
     # project-local deployment.
+    request_body = request.get_json(silent=True)
+    if inference_service.is_streaming_chat_request(request_body):
+        body = inference_service.chat_completions_stream(
+            raw_api_key=get_project_api_key(),
+            body=request_body,
+        )
+        stream, status_code = body
+        return Response(
+            stream_with_context(stream),
+            status=status_code,
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     body, status_code = inference_service.chat_completions(
         raw_api_key=get_project_api_key(),
-        body=request.get_json(silent=True),
+        body=request_body,
     )
     return jsonify(body), status_code
 

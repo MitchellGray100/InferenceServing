@@ -71,7 +71,7 @@ TOP_LEVEL_HELP = """command reference:
 
   inference chat [--api-key <project-api-key>] [--model <name>]
       [--prompt <text>] [--max-tokens <n>] [--temperature <float>]
-      [--json <json-object>]
+      [--stream] [--json <json-object>]
   inference models [--api-key <project-api-key>]
 
   analytics overview <project-id>
@@ -175,6 +175,48 @@ class ApiClient:
             message = error_message(body)
             raise CliError(f"{method} {path} failed with {response.status_code}: {message}")
         return body
+
+    def stream_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any],
+        project_api_key: str,
+    ):
+        """Call a streaming endpoint and yield decoded response chunks."""
+        headers = {
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {project_api_key}",
+        }
+        url = self.state.base_url().rstrip("/") + path
+        try:
+            response = self.session.request(
+                method,
+                url,
+                headers=headers,
+                json=json_body,
+                stream=True,
+                timeout=300,
+            )
+        except requests.RequestException as exc:
+            raise CliError(f"Could not reach MiniTen API at {url}: {exc}") from exc
+
+        try:
+            if response.status_code >= 400:
+                body = parse_response_body(response)
+                message = error_message(body)
+                raise CliError(
+                    f"{method} {path} failed with {response.status_code}: {message}"
+                )
+            for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+                if chunk:
+                    yield chunk
+        finally:
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
 
 
 def default_config_path() -> Path:
@@ -587,6 +629,18 @@ def inference_chat(args: argparse.Namespace, state: CliState, client: ApiClient)
         "max_tokens": args.max_tokens,
         "temperature": args.temperature,
     }
+    if args.stream:
+        body["stream"] = True
+        print_chat_stream(
+            client.stream_request(
+                "POST",
+                "/v1/chat/completions",
+                json_body=body,
+                project_api_key=api_key,
+            )
+        )
+        return
+
     print_json(
         client.request(
             "POST",
@@ -596,6 +650,47 @@ def inference_chat(args: argparse.Namespace, state: CliState, client: ApiClient)
             project_api_key=api_key,
         )
     )
+
+
+def print_chat_stream(chunks) -> None:
+    """Print OpenAI SSE chat deltas as they arrive."""
+    buffer = ""
+    for chunk in chunks:
+        buffer += chunk
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            text = chat_stream_line_text(line)
+            if text:
+                print(text, end="", flush=True)
+    if buffer:
+        text = chat_stream_line_text(buffer)
+        if text:
+            print(text, end="", flush=True)
+    print()
+
+
+def chat_stream_line_text(line: str) -> str | None:
+    """Extract printable text from one OpenAI SSE line."""
+    stripped = line.strip()
+    if not stripped.startswith("data:"):
+        return None
+
+    payload_text = stripped.removeprefix("data:").strip()
+    if not payload_text or payload_text == "[DONE]":
+        return None
+
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return payload_text
+
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not choices:
+        return None
+
+    first = choices[0]
+    delta = first.get("delta") or {}
+    return delta.get("content") or first.get("text")
 
 
 def inference_models(args: argparse.Namespace, state: CliState, client: ApiClient) -> None:
@@ -829,6 +924,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--prompt")
     chat.add_argument("--max-tokens", type=int, default=128)
     chat.add_argument("--temperature", type=float, default=0)
+    chat.add_argument("--stream", action="store_true")
     add_json_arg(chat)
     chat.set_defaults(handler=inference_chat)
     inf_models = inference_sub.add_parser("models")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import socket
+import subprocess
 from pathlib import Path
 
 
@@ -11,6 +12,36 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SETUP_MARKER = PROJECT_ROOT / ".local" / "setup-env.ok"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
+DOCKER_READY_TIMEOUT_SECONDS = 20
+
+
+def assert_docker_ready() -> None:
+    """Fail early if Docker Desktop/daemon is not responding."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_READY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Docker CLI was not found. Install Docker Desktop and make sure "
+            "`docker` is available on PATH before running `make setup-env`."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "Docker is not responding. Restart Docker Desktop, wait until the "
+            "engine is running, then rerun `make setup-env`."
+        ) from exc
+
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        raise RuntimeError(
+            "Docker is not ready. Start or restart Docker Desktop, then rerun "
+            f"`make setup-env`.\n{output}"
+        )
 
 
 def assert_api_not_running(host: str, port: int) -> None:
@@ -62,6 +93,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "command",
         choices=[
+            "assert-docker-ready",
             "assert-api-not-running",
             "assert-setup-complete",
             "mark-setup-complete",
@@ -78,7 +110,9 @@ def main() -> int:
     args = parse_args()
 
     try:
-        if args.command == "assert-api-not-running":
+        if args.command == "assert-docker-ready":
+            assert_docker_ready()
+        elif args.command == "assert-api-not-running":
             assert_api_not_running(args.host, args.port)
         elif args.command == "assert-setup-complete":
             assert_setup_complete()

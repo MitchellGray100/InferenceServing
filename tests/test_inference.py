@@ -72,6 +72,28 @@ def test_chat_completions_route(monkeypatch, client) -> None:
     assert response.get_json()["id"] == "chatcmpl_123"
 
 
+def test_chat_completions_route_streams(monkeypatch, client) -> None:
+    def chat_completions_stream(raw_api_key, body):
+        assert raw_api_key == "mt_live_visible_secret"
+        assert body["stream"] is True
+        return iter([b"data: first\n\n", b"data: [DONE]\n\n"]), 200
+
+    monkeypatch.setattr(
+        "app.routes.inference.inference_service.chat_completions_stream",
+        chat_completions_stream,
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "qwen-small-prod", "messages": [], "stream": True},
+        headers={"Authorization": "Bearer mt_live_visible_secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/event-stream"
+    assert response.data == b"data: first\n\ndata: [DONE]\n\n"
+
+
 def test_list_models_route(monkeypatch, client) -> None:
     expected = {"object": "list", "data": []}
     monkeypatch.setattr(
@@ -336,21 +358,47 @@ def test_chat_completions_records_upstream_http_errors(monkeypatch, app) -> None
     assert records[0]["error_type"] == "upstream_4xx"
 
 
-def test_chat_completions_rejects_streaming_before_proxy(monkeypatch, app) -> None:
+def test_chat_completions_stream_proxies_chunks_and_logs_request(monkeypatch, app) -> None:
+    records = []
     monkeypatch.setattr(
         inference_service.api_key_service,
         "authenticate_project_api_key",
-        lambda raw_key: pytest.fail("streaming request should not authenticate"),
+        lambda raw_key: {
+            "apiKeyID": API_KEY_ID,
+            "projectID": PROJECT_ID,
+            "apiKeyPrefix": "mt_live_visible",
+        },
+    )
+    monkeypatch.setattr(
+        inference_service,
+        "get_deployment_for_inference",
+        lambda project_id, model_name: deployment_row(),
+    )
+    monkeypatch.setattr(
+        inference_service.requests,
+        "post",
+        lambda url, json, timeout, stream: FakeStreamingResponse(
+            [b"data: one\n\n", b"data: [DONE]\n\n"],
+            200,
+        ),
+    )
+    monkeypatch.setattr(
+        inference_service,
+        "record_inference_request",
+        lambda **kwargs: records.append(kwargs),
     )
 
-    with app.app_context(), pytest.raises(ApiError) as error:
-        inference_service.chat_completions(
+    with app.app_context():
+        chunks, status = inference_service.chat_completions_stream(
             "raw-key",
             {"model": "qwen-small-prod", "messages": [], "stream": True},
         )
+        assert status == 200
+        assert b"".join(chunks) == b"data: one\n\ndata: [DONE]\n\n"
 
-    assert error.value.type == "streaming_not_supported"
-    assert error.value.status_code == 400
+    assert records[0]["streamed"] is True
+    assert records[0]["status_code"] == 200
+    assert records[0]["api_key_prefix"] == "mt_live_visible"
 
 
 @pytest.mark.parametrize(
@@ -411,6 +459,19 @@ class FakeResponse:
         if isinstance(self.payload, Exception):
             raise self.payload
         return self.payload
+
+
+class FakeStreamingResponse:
+    def __init__(self, chunks, status_code=200):
+        self.chunks = chunks
+        self.status_code = status_code
+        self.closed = False
+
+    def iter_content(self, chunk_size=None):
+        yield from self.chunks
+
+    def close(self):
+        self.closed = True
 
 
 class FakeCursor:

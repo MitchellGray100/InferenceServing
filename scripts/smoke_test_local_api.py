@@ -223,6 +223,7 @@ def run_smoke_tests(base_url: str) -> None:
         model_deployment_id,
         start_command["deploymentJob"]["deploymentJobID"],
         owner_token,
+        expected_status="skipped",
     )
     wait_for_model_status(
         client,

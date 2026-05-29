@@ -1,0 +1,20 @@
+{% extends "dashboard/base.html" if is_authenticated else "dashboard/public.html" %}
+
+{% block title %}MiniTen Error{% endblock %}
+
+{% block content %}
+  <section class="error-panel">
+    <p class="eyebrow">{{ status_code }}</p>
+    <h1>Something went wrong</h1>
+    <p class="lede">{{ message }}</p>
+    <div class="actions">
+      {% if is_authenticated %}
+        <a class="button" href="{{ url_for('dashboard.projects') }}">Projects</a>
+        <a class="button secondary" href="{{ url_for('dashboard.inference') }}">Inference</a>
+      {% else %}
+        <a class="button" href="{{ url_for('dashboard.login') }}">Log in</a>
+        <a class="button secondary" href="{{ url_for('dashboard.index') }}">Home</a>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

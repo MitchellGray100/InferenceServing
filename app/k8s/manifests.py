@@ -18,6 +18,8 @@ MANAGED_BY_LABEL = "miniten"
 VLLM_PORT = 8000
 VLLM_PORT_NAME = "http"
 HF_CACHE_MOUNT_PATH = "/root/.cache/huggingface"
+LOCAL_GPU_DRIVER_VOLUME_NAME = "local-nvidia-driver-libs"
+LOCAL_GPU_WSL_DEVICE_VOLUME_NAME = "local-wsl-gpu-device"
 
 
 def build_namespace_manifest(namespace: str) -> dict[str, Any]:
@@ -78,6 +80,42 @@ def build_deployment_manifest(
     labels = model_labels(namespace, service_name)
     container = build_vllm_container(deployment, pvc_name=pvc, secret_name=secret_name)
 
+    pod_spec = {
+        "containers": [container],
+        "volumes": [
+            {
+                "name": "hf-cache",
+                "persistentVolumeClaim": {
+                    "claimName": pvc,
+                },
+            }
+        ],
+    }
+    if should_mount_local_gpu_driver_libraries(deployment):
+        # Docker Desktop/kind does not inject NVIDIA driver libraries into pods
+        # the same way `docker run --gpus all` does. The local GPU smoke setup
+        # copies those libraries into the kind node and this hostPath mount
+        # exposes them to the vLLM container. Production clusters should rely
+        # on the NVIDIA container runtime/device plugin path instead.
+        pod_spec["volumes"].append(
+            {
+                "name": LOCAL_GPU_DRIVER_VOLUME_NAME,
+                "hostPath": {
+                    "path": Config.LOCAL_KIND_GPU_DRIVER_PATH,
+                    "type": "Directory",
+                },
+            }
+        )
+        pod_spec["volumes"].append(
+            {
+                "name": LOCAL_GPU_WSL_DEVICE_VOLUME_NAME,
+                "hostPath": {
+                    "path": "/dev/dxg",
+                    "type": "CharDevice",
+                },
+            }
+        )
+
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -96,18 +134,13 @@ def build_deployment_manifest(
             "template": {
                 "metadata": {
                     "labels": labels,
+                    "annotations": {
+                        "miniten.io/desired-generation": str(
+                            deployment.get("desired_generation", 1)
+                        ),
+                    },
                 },
-                "spec": {
-                    "containers": [container],
-                    "volumes": [
-                        {
-                            "name": "hf-cache",
-                            "persistentVolumeClaim": {
-                                "claimName": pvc,
-                            },
-                        }
-                    ],
-                },
+                "spec": pod_spec,
             },
         },
     }
@@ -287,7 +320,8 @@ def build_vllm_container(
             "value": HF_CACHE_MOUNT_PATH,
         }
     ]
-    if Config.VLLM_DEVICE:
+    vllm_device = Config.VLLM_DEVICE or ("cuda" if deployment.get("gpu_count", 0) else "")
+    if vllm_device:
         # Local kind clusters usually do not expose GPUs to pods. Letting vLLM
         # auto-detect the device can crash before readiness starts. vLLM reads
         # VLLM_TARGET_DEVICE while constructing CLI defaults. Newer CPU images
@@ -295,7 +329,7 @@ def build_vllm_container(
         env.append(
             {
                 "name": "VLLM_TARGET_DEVICE",
-                "value": Config.VLLM_DEVICE,
+                "value": vllm_device,
             }
         )
     if Config.VLLM_LOGGING_LEVEL:
@@ -303,6 +337,37 @@ def build_vllm_container(
             {
                 "name": "VLLM_LOGGING_LEVEL",
                 "value": Config.VLLM_LOGGING_LEVEL,
+            }
+        )
+    if should_mount_local_gpu_driver_libraries(deployment):
+        env.append(
+            {
+                "name": "LD_LIBRARY_PATH",
+                "value": (
+                    f"{Config.LOCAL_KIND_GPU_DRIVER_PATH}:"
+                    "/usr/local/nvidia/lib:/usr/local/nvidia/lib64:"
+                    "/usr/local/cuda/lib64:"
+                    "/usr/local/cuda/targets/x86_64-linux/lib:"
+                    "/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu"
+                ),
+            }
+        )
+        env.append(
+            {
+                "name": "NVIDIA_VISIBLE_DEVICES",
+                "value": "all",
+            }
+        )
+        env.append(
+            {
+                "name": "NVIDIA_DRIVER_CAPABILITIES",
+                "value": "compute,utility",
+            }
+        )
+        env.append(
+            {
+                "name": "CUDA_VISIBLE_DEVICES",
+                "value": "0",
             }
         )
 
@@ -351,7 +416,30 @@ def build_vllm_container(
             }
         )
 
+    if should_mount_local_gpu_driver_libraries(deployment):
+        container["volumeMounts"].append(
+            {
+                "name": LOCAL_GPU_DRIVER_VOLUME_NAME,
+                "mountPath": Config.LOCAL_KIND_GPU_DRIVER_PATH,
+            }
+        )
+        container["volumeMounts"].append(
+            {
+                "name": LOCAL_GPU_WSL_DEVICE_VOLUME_NAME,
+                "mountPath": "/dev/dxg",
+            }
+        )
+
     return container
+
+
+def should_mount_local_gpu_driver_libraries(deployment: dict[str, Any]) -> bool:
+    """Return true when local kind GPU smoke tests need driver hostPath mounts."""
+    return bool(
+        Config.LOCAL_KIND_GPU_DRIVER_MOUNT
+        and deployment.get("gpu_count", 0)
+        and deployment["vllm_image"] != Config.K8S_SMOKE_TEST_IMAGE
+    )
 
 
 def build_smoke_test_container(

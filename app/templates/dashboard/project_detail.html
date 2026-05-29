@@ -1,0 +1,119 @@
+{% extends "dashboard/base.html" %}
+{% block title %}{{ project.name }} - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">{{ project.role }} · {{ project.k8s_namespace }}</p>
+    <h1>{{ project.name }}</h1>
+  </div>
+  <div class="actions">
+    <a class="button" href="{{ url_for('dashboard.model_new', project_id=project.projectID) }}">Deploy model</a>
+    <form method="post" action="{{ url_for('dashboard.project_delete', project_id=project.projectID) }}" data-confirm={{ ('Delete project ' ~ project.name ~ '? This deletes project data and cannot be undone.')|tojson }}>
+      <button class="danger" type="submit">Delete project</button>
+    </form>
+  </div>
+</section>
+
+<section class="stats">
+  <div><span>Total models</span><strong>{{ analytics.summary.total_models }}</strong></div>
+  <div><span>Running</span><strong>{{ analytics.summary.running_models }}</strong></div>
+  <div><span>Requests</span><strong>{{ analytics.summary.total_requests }}</strong></div>
+  <div><span>Errors</span><strong>{{ analytics.summary.error_count }}</strong></div>
+</section>
+
+<section class="table-section">
+  <div class="section-heading"><h2>Models</h2></div>
+  <table>
+    <thead><tr><th>Name</th><th>Model ID</th><th>Status</th><th>Replicas</th><th></th></tr></thead>
+    <tbody>
+      {% for model in models %}
+        <tr>
+          <td><a href="{{ url_for('dashboard.model_detail', project_id=project.projectID, model_id=model.modelDeploymentID) }}">{{ model.name }}</a></td>
+          <td>{{ model.model_id }}</td>
+          <td><span class="status">{{ model.status }}</span></td>
+          <td>{{ model.replicas }}</td>
+          <td class="right">
+            <a class="button small secondary" href="{{ url_for('dashboard.model_analytics', project_id=project.projectID, model_name=model.name) }}">Analytics</a>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">No model deployments yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="grid two">
+  <div class="panel">
+    <h2>API Keys</h2>
+    <form method="post" action="{{ url_for('dashboard.api_key_create', project_id=project.projectID) }}" class="inline-form">
+      <input name="name" placeholder="Key name" required>
+      <button type="submit">Create key</button>
+    </form>
+    <table>
+      <thead><tr><th>Name</th><th>Prefix</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for key in api_keys %}
+          <tr>
+            <td>{{ key.name }}</td>
+            <td>{{ key.key_prefix }}</td>
+            <td>
+              {% if key.revoked_at %}
+                <span class="status status-revoked">Revoked</span>
+              {% else %}
+                <span class="status status-active">Active</span>
+              {% endif %}
+            </td>
+            <td class="right">
+              {% if not key.revoked_at %}
+                <form method="post" action="{{ url_for('dashboard.api_key_revoke', project_id=project.projectID, api_key_id=key.apiKeyID) }}">
+                  <button class="ghost" type="submit">Revoke</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">No API keys.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h2>Members</h2>
+    <form method="post" action="{{ url_for('dashboard.member_add', project_id=project.projectID) }}" class="inline-form wrap">
+      <input name="email" placeholder="user@example.com" required>
+      <select name="role">
+        <option value="member">member</option>
+        <option value="viewer">viewer</option>
+        <option value="owner">owner</option>
+      </select>
+      <button type="submit">Add</button>
+    </form>
+    <table>
+      <thead><tr><th>Email</th><th>Role</th><th></th></tr></thead>
+      <tbody>
+        {% for member in members %}
+          <tr>
+            <td>{{ member.email }}</td>
+            <td>
+              <form method="post" action="{{ url_for('dashboard.member_update', project_id=project.projectID, target_user_id=member.userID) }}" class="inline-form">
+                <select name="role">
+                  {% for role in ["owner", "member", "viewer"] %}
+                    <option value="{{ role }}" {% if role == member.role %}selected{% endif %}>{{ role }}</option>
+                  {% endfor %}
+                </select>
+                <button class="ghost" type="submit">Save</button>
+              </form>
+            </td>
+            <td class="right">
+              <form method="post" action="{{ url_for('dashboard.member_remove', project_id=project.projectID, target_user_id=member.userID) }}">
+                <button class="ghost" type="submit">Remove</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

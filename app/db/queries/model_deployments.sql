@@ -61,6 +61,18 @@ VALUES (
 )
 RETURNING *;
 
+-- name: release_deleted_model_deployment_name
+-- Existing local/dev databases may still have a full UNIQUE(project_id, name)
+-- constraint. Rename soft-deleted rows before inserting so users can recreate
+-- a model with the same project-local name without losing job history.
+UPDATE model_deployments
+SET
+  name = name || '-deleted-' || LEFT(model_deployment_id::text, 8),
+  updated_at = CURRENT_TIMESTAMP
+WHERE project_id = %(project_id)s
+  AND name = %(name)s
+  AND deleted_at IS NOT NULL;
+
 -- name: list_model_deployments
 -- Dashboard/control-plane list view. Soft-deleted rows stay hidden while their
 -- history remains available through deployment_jobs/model_events later.
@@ -127,6 +139,21 @@ SET
 WHERE model_deployment_id = %(model_deployment_id)s
 RETURNING *;
 
+-- name: advance_model_deployment_delete_requested
+-- Delete requests should immediately hide the model and release the
+-- project-local name. The worker still fetches the row including deleted rows
+-- so it can remove Kubernetes resources asynchronously.
+UPDATE model_deployments
+SET
+  status = 'deleting',
+  name = name || '-deleted-' || LEFT(model_deployment_id::text, 8),
+  deleted_at = CURRENT_TIMESTAMP,
+  desired_generation = desired_generation + 1,
+  updated_at = CURRENT_TIMESTAMP
+WHERE model_deployment_id = %(model_deployment_id)s
+  AND deleted_at IS NULL
+RETURNING *;
+
 -- name: advance_model_deployment_replicas
 -- Store desired fixed replica count before queueing scale work and advance the
 -- generation so older scale/lifecycle jobs cannot apply stale state.
@@ -168,7 +195,11 @@ RETURNING *;
 UPDATE model_deployments
 SET
   status = 'deleted',
-  deleted_at = CURRENT_TIMESTAMP,
+  name = CASE
+    WHEN deleted_at IS NULL THEN name || '-deleted-' || LEFT(model_deployment_id::text, 8)
+    ELSE name
+  END,
+  deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
   updated_at = CURRENT_TIMESTAMP
 WHERE model_deployment_id = %(model_deployment_id)s
 RETURNING *;

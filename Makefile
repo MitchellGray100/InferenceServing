@@ -1,7 +1,7 @@
 PYTHON ?= python
 POETRY ?= $(PYTHON) -m poetry
 
-.PHONY: install setup-env clean-env clean-kind clean-all migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test-local-apis test-local-k8s test-local-vllm tests coverage lint compile clean
+.PHONY: install setup-env setup-web open-dashboard clean-env clean-kind clean-all migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test-local-apis test-local-k8s test-local-vllm test-local-vllm-gpu tests coverage lint compile clean
 
 install:
 	$(PYTHON) -m pip install --upgrade pip poetry
@@ -16,7 +16,15 @@ setup-env: install
 	K8S_SMOKE_TEST_IMAGE=$${K8S_SMOKE_TEST_IMAGE:-python:3.12-alpine} WORKER_DRY_RUN=true WORKER_POLL_INTERVAL_SECONDS=0.2 KUBECONFIG_DIR=.local/kube docker compose up -d --build --force-recreate worker
 	$(POETRY) run python scripts/local_env_guard.py mark-setup-complete
 
+setup-web: setup-env
+	$(MAKE) start-worker-real-k8s
+	$(POETRY) run python scripts/start_dashboard.py
+
+open-dashboard:
+	$(POETRY) run python scripts/start_dashboard.py
+
 clean-env:
+	$(POETRY) run python scripts/stop_local_api.py
 	docker compose down -v --remove-orphans
 	$(POETRY) run python scripts/local_env_guard.py clear-setup-marker
 
@@ -63,6 +71,11 @@ test-local-k8s:
 test-local-vllm:
 	VLLM_DEVICE=$${MINITEN_VLLM_TEST_DEVICE:-cpu} $(MAKE) start-worker-real-k8s
 	$(POETRY) run python scripts/smoke_test_local_vllm.py
+
+test-local-vllm-gpu:
+	$(POETRY) run python scripts/check_local_gpu_k8s.py
+	MINITEN_VLLM_TEST_MODEL_ID=$${MINITEN_VLLM_GPU_TEST_MODEL_ID:-HuggingFaceTB/SmolLM2-135M-Instruct} MINITEN_VLLM_TEST_GPU_COUNT=$${MINITEN_VLLM_GPU_TEST_GPU_COUNT:-1} MINITEN_VLLM_TEST_DEVICE=$${MINITEN_VLLM_GPU_TEST_DEVICE:-cuda} VLLM_DEVICE=$${MINITEN_VLLM_GPU_TEST_DEVICE:-cuda} KUBECONFIG_DIR=$${KUBECONFIG_DIR:-.local/kube} WORKER_DRY_RUN=false docker compose up -d --build --force-recreate worker
+	MINITEN_VLLM_TEST_MODEL_ID=$${MINITEN_VLLM_GPU_TEST_MODEL_ID:-HuggingFaceTB/SmolLM2-135M-Instruct} MINITEN_VLLM_TEST_GPU_COUNT=$${MINITEN_VLLM_GPU_TEST_GPU_COUNT:-1} MINITEN_VLLM_TEST_DEVICE=$${MINITEN_VLLM_GPU_TEST_DEVICE:-cuda} $(POETRY) run python scripts/smoke_test_local_vllm.py
 
 tests:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(POETRY) run pytest

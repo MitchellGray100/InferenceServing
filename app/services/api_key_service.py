@@ -28,7 +28,10 @@ from app.utils.validation import validate_api_key_name, validate_uuid
 queries = load_queries()
 logger = logging.getLogger(__name__)
 API_KEY_HASH_UNIQUE_CONSTRAINT = "uq_api_keys_key_hash"
-API_KEY_NAME_UNIQUE_CONSTRAINT = "uq_api_keys_project_name"
+API_KEY_NAME_UNIQUE_CONSTRAINTS = {
+    "uq_api_keys_project_name",
+    "uq_api_keys_project_active_name",
+}
 MAX_API_KEY_CREATE_ATTEMPTS = 3
 
 
@@ -80,7 +83,7 @@ def create_api_key(user_id: Any, project_id: Any, name: Any) -> dict[str, Any]:
                     row = cur.fetchone()
                     break
         except Exception as exc:
-            if _is_unique_violation(exc, API_KEY_NAME_UNIQUE_CONSTRAINT):
+            if _is_unique_violation(exc, API_KEY_NAME_UNIQUE_CONSTRAINTS):
                 logger.info(
                     "API key creation rejected due to duplicate name project_id=%s.",
                     canonical_project_id,
@@ -276,7 +279,10 @@ def _constraint_name(exc: Exception) -> str | None:
     return getattr(diag, "constraint_name", None)
 
 
-def _is_unique_violation(exc: Exception, constraint_name: str | None = None) -> bool:
+def _is_unique_violation(
+    exc: Exception,
+    constraint_name: str | set[str] | None = None,
+) -> bool:
     """Detect psycopg unique violations without importing psycopg globally."""
     if exc.__class__.__name__ != "UniqueViolation":
         return False
@@ -284,4 +290,7 @@ def _is_unique_violation(exc: Exception, constraint_name: str | None = None) -> 
     if constraint_name is None:
         return True
 
-    return _constraint_name(exc) == constraint_name
+    actual = _constraint_name(exc)
+    if isinstance(constraint_name, set):
+        return actual in constraint_name
+    return actual == constraint_name

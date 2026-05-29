@@ -1,0 +1,19 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Logs - {{ model_name }}{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Logs</p><h1>{{ model_name }}</h1></div>
+  <form method="get" class="inline-form">
+    <input name="tail" type="number" min="1" max="1000" placeholder="200">
+    <button type="submit">Refresh</button>
+  </form>
+</section>
+{% for pod in logs %}
+  <section class="panel">
+    <h2>{{ pod.pod }}</h2>
+    <pre>{{ pod.logs }}</pre>
+  </section>
+{% else %}
+  <section class="panel empty">No logs returned.</section>
+{% endfor %}
+{% endblock %}

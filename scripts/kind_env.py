@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 
@@ -13,22 +16,46 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_KUBE_DIR = PROJECT_ROOT / ".local" / "kube"
 LOCAL_KUBECONFIG = LOCAL_KUBE_DIR / "config"
 DEFAULT_CLUSTER_NAME = "miniten"
+DEFAULT_GPU_PROBE_IMAGE = "nvidia/cuda:12.4.1-base-ubuntu22.04"
+NVIDIA_DEVICE_PLUGIN_URL = (
+    "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/"
+    "deployments/static/nvidia-device-plugin.yml"
+)
+NVIDIA_DRIVER_LIBRARY_NAMES = ("libcuda.so.1", "libnvidia-ml.so.1")
+NVIDIA_NODE_DRIVER_LIBRARY_DIR = "/usr/local/nvidia/lib64"
+NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
 
 
-def ensure_kind_environment(cluster_name: str) -> None:
+def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
     """Create or reuse a kind cluster and export a Docker-friendly kubeconfig."""
     require_tool("docker")
     require_tool("kind")
     require_tool("kubectl")
     run(["docker", "info"])
+    if gpu:
+        verify_docker_gpu_runtime()
 
-    if cluster_name in existing_clusters():
+    cluster_exists = cluster_name in existing_clusters()
+    if cluster_exists:
         print(f"kind cluster already exists: {cluster_name}")
     else:
         print(f"Creating kind cluster: {cluster_name}")
         run(["kind", "create", "cluster", "--name", cluster_name])
 
-    export_docker_kubeconfig(cluster_name)
+    try:
+        export_docker_kubeconfig(cluster_name)
+    except RuntimeError as exc:
+        if not cluster_exists:
+            raise
+        print(
+            "Existing kind cluster is unusable; recreating it. "
+            f"Original error: {exc}"
+        )
+        run(["kind", "delete", "cluster", "--name", cluster_name])
+        run(["kind", "create", "cluster", "--name", cluster_name])
+        export_docker_kubeconfig(cluster_name)
+    if gpu:
+        ensure_kind_gpu_support(cluster_name)
     run(["kubectl", "cluster-info", "--context", f"kind-{cluster_name}"])
     run(["kubectl", "get", "nodes", "--context", f"kind-{cluster_name}"])
 
@@ -61,6 +88,207 @@ def export_docker_kubeconfig(cluster_name: str) -> None:
     LOCAL_KUBE_DIR.mkdir(parents=True, exist_ok=True)
     LOCAL_KUBECONFIG.write_text(result.stdout, encoding="utf-8")
     print(f"Wrote Docker worker kubeconfig: {LOCAL_KUBECONFIG}")
+
+
+def verify_docker_gpu_runtime() -> None:
+    """Fail early unless Docker can run a CUDA container with GPU access."""
+    image = os.getenv("MINITEN_GPU_PROBE_IMAGE", DEFAULT_GPU_PROBE_IMAGE)
+    run(["docker", "run", "--rm", "--gpus", "all", image, "nvidia-smi"])
+
+
+def ensure_kind_gpu_support(cluster_name: str) -> None:
+    """Make the local kind node usable for NVIDIA GPU smoke tests.
+
+    Docker Desktop injects NVIDIA driver libraries into containers started with
+    `--gpus all`. kind node containers are not started that way, so the node can
+    have `/dev/dxg` while still missing NVML/CUDA libraries. The device plugin
+    needs those libraries to advertise `nvidia.com/gpu`, and vLLM pods need the
+    CUDA driver library at runtime.
+    """
+    node_name = f"{cluster_name}-control-plane"
+    copy_nvidia_driver_libraries_to_kind_node(node_name)
+    enable_node_nvidia_library_path(node_name)
+    install_nvidia_device_plugin(cluster_name)
+    patch_node_gpu_capacity(cluster_name, node_name)
+    wait_for_allocatable_gpus(cluster_name)
+
+
+def copy_nvidia_driver_libraries_to_kind_node(node_name: str) -> None:
+    """Copy CUDA/NVML driver libraries from a GPU-enabled container into kind."""
+    image = os.getenv("MINITEN_GPU_PROBE_IMAGE", DEFAULT_GPU_PROBE_IMAGE)
+    with tempfile.TemporaryDirectory(prefix="miniten-gpu-libs-") as temp_dir:
+        temp_path = Path(temp_dir)
+        container_name = f"miniten-gpu-libs-{os.getpid()}"
+        try:
+            run(
+                [
+                    "docker",
+                    "create",
+                    "--name",
+                    container_name,
+                    "--gpus",
+                    "all",
+                    image,
+                    "sleep",
+                    "300",
+                ]
+            )
+            run(["docker", "start", container_name])
+            run(["docker", "exec", container_name, "mkdir", "-p", "/tmp/miniten-gpu-libs"])
+            for library_name in NVIDIA_DRIVER_LIBRARY_NAMES:
+                source = find_library_in_container(container_name, library_name)
+                run(
+                    [
+                        "docker",
+                        "exec",
+                        container_name,
+                        "cp",
+                        "-L",
+                        source,
+                        f"/tmp/miniten-gpu-libs/{library_name}",
+                    ]
+                )
+                run(
+                    [
+                        "docker",
+                        "cp",
+                        f"{container_name}:/tmp/miniten-gpu-libs/{library_name}",
+                        str(temp_path),
+                    ]
+                )
+        finally:
+            run(["docker", "rm", "-f", container_name])
+
+        run(
+            [
+                "docker",
+                "exec",
+                node_name,
+                "mkdir",
+                "-p",
+                NVIDIA_NODE_DRIVER_LIBRARY_DIR,
+            ]
+        )
+        for library_name in NVIDIA_DRIVER_LIBRARY_NAMES:
+            run(
+                [
+                    "docker",
+                    "cp",
+                    str(temp_path / library_name),
+                    f"{node_name}:{NVIDIA_NODE_DRIVER_LIBRARY_DIR}/{library_name}",
+                ]
+            )
+    print(f"Copied NVIDIA driver libraries into kind node: {node_name}")
+
+
+def find_library_in_container(container_name: str, library_name: str) -> str:
+    """Find one NVIDIA driver library inside the GPU probe container."""
+    result = run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "sh",
+            "-lc",
+            f"find /usr/lib /usr/local/cuda* -name {library_name} 2>/dev/null | head -n 1",
+        ],
+        capture=True,
+    )
+    library_path = result.stdout.strip()
+    if not library_path:
+        raise RuntimeError(f"Could not find {library_name} in GPU probe container.")
+    return library_path
+
+
+def enable_node_nvidia_library_path(node_name: str) -> None:
+    """Add copied NVIDIA libraries to the kind node linker cache."""
+    run(
+        [
+            "docker",
+            "exec",
+            node_name,
+            "sh",
+            "-lc",
+            (
+                f"echo {NVIDIA_NODE_DRIVER_LIBRARY_DIR} "
+                "> /etc/ld.so.conf.d/miniten-nvidia.conf && ldconfig"
+            ),
+        ]
+    )
+
+
+def install_nvidia_device_plugin(cluster_name: str) -> None:
+    """Install the NVIDIA device plugin into the local kind cluster."""
+    run(
+        [
+            "kubectl",
+            "apply",
+            "--context",
+            f"kind-{cluster_name}",
+            "-f",
+            NVIDIA_DEVICE_PLUGIN_URL,
+        ]
+    )
+
+
+def patch_node_gpu_capacity(cluster_name: str, node_name: str) -> None:
+    """Advertise one local WSL2 GPU when the NVIDIA plugin cannot discover it.
+
+    Docker Desktop's WSL2 GPU path exposes `/dev/dxg`, but the upstream NVIDIA
+    device plugin expects the standard Linux NVIDIA device/runtime integration.
+    For the single-node local smoke test, we patch the node status so Kubernetes
+    can schedule a pod that requests `nvidia.com/gpu`; the pod itself receives
+    `/dev/dxg` and copied driver libraries through explicit hostPath mounts.
+    """
+    patch = {
+        "status": {
+            "capacity": {NVIDIA_GPU_RESOURCE: "1"},
+            "allocatable": {NVIDIA_GPU_RESOURCE: "1"},
+        }
+    }
+    run(
+        [
+            "kubectl",
+            "patch",
+            "node",
+            node_name,
+            "--context",
+            f"kind-{cluster_name}",
+            "--subresource=status",
+            "--type=merge",
+            "-p",
+            json.dumps(patch),
+        ]
+    )
+
+
+def wait_for_allocatable_gpus(cluster_name: str) -> None:
+    """Wait for the device plugin to advertise GPUs to Kubernetes."""
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        result = run(
+            [
+                "kubectl",
+                "get",
+                "nodes",
+                "--context",
+                f"kind-{cluster_name}",
+                "-o",
+                (
+                    "jsonpath={.items[*].status.allocatable."
+                    "nvidia\\.com/gpu}"
+                ),
+            ],
+            capture=True,
+        )
+        if any(value.isdigit() and int(value) > 0 for value in result.stdout.split()):
+            print(f"Kubernetes advertises allocatable {NVIDIA_GPU_RESOURCE}: {result.stdout}")
+            return
+        time.sleep(2)
+    raise RuntimeError(
+        f"Kubernetes did not advertise allocatable {NVIDIA_GPU_RESOURCE}. "
+        "Check the nvidia-device-plugin DaemonSet logs in kube-system."
+    )
 
 
 def existing_clusters() -> set[str]:
@@ -107,6 +335,11 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("MINITEN_KIND_CLUSTER_NAME", DEFAULT_CLUSTER_NAME),
         help="kind cluster name to create/delete.",
     )
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="configure the kind cluster for local NVIDIA GPU smoke tests.",
+    )
     return parser.parse_args()
 
 
@@ -115,7 +348,7 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "ensure":
-            ensure_kind_environment(args.cluster_name)
+            ensure_kind_environment(args.cluster_name, gpu=args.gpu)
         else:
             delete_kind_environment(args.cluster_name)
     except RuntimeError as exc:

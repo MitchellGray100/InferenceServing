@@ -1,0 +1,38 @@
+<section class="panel">
+  <h2>Resources</h2>
+  <div class="form-grid">
+    <label>CPU request <input name="cpu_request" placeholder="1" value="{{ model.resources.cpu_request if model else '1' }}"></label>
+    <label>CPU limit <input name="cpu_limit" placeholder="4" value="{{ model.resources.cpu_limit if model else '4' }}"></label>
+    <label>Memory request <input name="memory_request" placeholder="1Gi" value="{{ model.resources.memory_request if model else '1Gi' }}"></label>
+    <label>Memory limit <input name="memory_limit" placeholder="6Gi" value="{{ model.resources.memory_limit if model else '6Gi' }}"></label>
+    <label>GPU count <input name="gpu_count" type="number" min="0" value="{{ model.resources.gpu_count if model else 0 }}"></label>
+  </div>
+</section>
+<section class="panel">
+  <h2>vLLM</h2>
+  <div class="form-grid">
+    <label>Dtype
+      <select name="dtype">
+        {% for dtype in ["auto", "float16", "half", "bfloat16", "float", "float32"] %}
+          <option value="{{ dtype }}" {% if model and model.vllm.dtype == dtype %}selected{% endif %}>{{ dtype }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Max model length <input name="max_model_len" type="number" min="1" value="{{ model.vllm.max_model_len if model else 256 }}"></label>
+  </div>
+</section>
+<section class="panel">
+  <h2>Autoscaling</h2>
+  {% set autoscaling_enabled = model.autoscaling.enabled if model else false %}
+  <div class="form-grid">
+    <label>Enabled
+      <select name="autoscaling_enabled" data-autoscaling-toggle>
+        <option value="true" {% if autoscaling_enabled %}selected{% endif %}>true</option>
+        <option value="false" {% if not autoscaling_enabled %}selected{% endif %}>false</option>
+      </select>
+    </label>
+    <label>Min replicas <input name="min_replicas" type="number" min="1" value="{{ model.autoscaling.min_replicas if autoscaling_enabled and model and model.autoscaling.min_replicas else '' }}" data-autoscaling-field data-autoscaling-default="1" {% if not autoscaling_enabled %}disabled{% endif %}></label>
+    <label>Max replicas <input name="max_replicas" type="number" min="1" value="{{ model.autoscaling.max_replicas if autoscaling_enabled and model and model.autoscaling.max_replicas else '' }}" data-autoscaling-field data-autoscaling-default="3" {% if not autoscaling_enabled %}disabled{% endif %}></label>
+    <label>Target CPU % <input name="target_cpu_utilization" type="number" min="1" max="100" value="{{ model.autoscaling.target_cpu_utilization if autoscaling_enabled and model and model.autoscaling.target_cpu_utilization else '' }}" data-autoscaling-field data-autoscaling-default="70" {% if not autoscaling_enabled %}disabled{% endif %}></label>
+  </div>
+</section>

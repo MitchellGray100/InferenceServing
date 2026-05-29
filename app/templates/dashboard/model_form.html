@@ -1,0 +1,26 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Deploy model - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">{{ project.name }}</p>
+    <h1>Deploy model</h1>
+  </div>
+</section>
+
+<form method="post" class="settings-form">
+  <section class="panel">
+    <h2>Identity</h2>
+    <div class="form-grid">
+      <label>Name <input name="name" required placeholder="qwen-small-prod"></label>
+      <label>Hugging Face model ID <input name="model_id" required placeholder="Qwen/Qwen2.5-0.5B-Instruct"></label>
+      <label>Replicas <input name="replicas" type="number" min="0" value="{{ model.replicas if model else 1 }}"></label>
+    </div>
+  </section>
+  {% include "dashboard/model_settings_fields.html" %}
+  <div class="actions">
+    <button type="submit">Deploy</button>
+    <a class="button secondary" href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

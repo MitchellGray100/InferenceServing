@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}MiniTen{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+    <script defer src="{{ url_for('static', filename='dashboard.js') }}"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('dashboard.index') }}">MiniTen</a>
+      <nav class="nav">
+        <a href="{{ url_for('dashboard.projects') }}">Projects</a>
+        <a href="{{ url_for('dashboard.inference') }}">Inference</a>
+      </nav>
+      <form method="post" action="{{ url_for('dashboard.logout') }}">
+        <button class="ghost" type="submit">Log out</button>
+      </form>
+    </header>
+    <main class="page">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="messages">
+            {% for category, message in messages %}
+              <div class="message {{ category }}">
+                <span>{{ message }}</span>
+                <button class="message-close" type="button" aria-label="Dismiss message" data-dismiss-message>&times;</button>
+              </div>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

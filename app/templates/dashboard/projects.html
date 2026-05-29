@@ -1,0 +1,40 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Projects - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Control plane</p>
+    <h1>Projects</h1>
+  </div>
+  <form method="post" class="inline-form">
+    <input name="name" placeholder="Project name" required>
+    <button type="submit">Create</button>
+  </form>
+</section>
+
+<section class="table-section">
+  <table>
+    <thead><tr><th>Name</th><th>Role</th><th>Namespace</th><th></th></tr></thead>
+    <tbody>
+      {% for project in projects %}
+        <tr>
+          <td><a href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}">{{ project.name }}</a></td>
+          <td>{{ project.role }}</td>
+          <td>{{ project.k8s_namespace }}</td>
+          <td class="right"><a class="button small" href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}">Open</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No projects yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="danger-zone">
+  <h2>Account</h2>
+  <p>{{ current_user.email }}</p>
+  <form method="post" action="{{ url_for('dashboard.delete_account') }}" data-confirm={{ 'Delete your MiniTen account? This cannot be undone.'|tojson }}>
+    <button class="danger" type="submit">Delete account</button>
+  </form>
+</section>
+{% endblock %}

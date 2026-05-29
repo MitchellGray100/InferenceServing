@@ -1,0 +1,15 @@
+{% extends "dashboard/base.html" %}
+{% block title %}API key created - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Credential</p><h1>API key created</h1></div>
+</section>
+<section class="panel">
+  <p class="muted">This value is shown once.</p>
+  <pre id="created-api-key">{{ api_key.api_key }}</pre>
+  <div class="actions">
+    <button type="button" data-copy-target="#created-api-key">Copy</button>
+    <a class="button secondary" href="{{ url_for('dashboard.project_detail', project_id=project_id) }}">Back to project</a>
+  </div>
+</section>
+{% endblock %}

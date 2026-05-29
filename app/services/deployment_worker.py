@@ -169,7 +169,11 @@ def fetch_deployment_for_job(job: dict[str, Any]) -> dict[str, Any]:
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                queries.get("get_model_deployment_by_id"),
+                queries.get(
+                    "get_model_deployment_by_id_including_deleted"
+                    if job.get("job_type") == "delete_model"
+                    else "get_model_deployment_by_id"
+                ),
                 {
                     "project_id": job["project_id"],
                     "model_deployment_id": model_deployment_id,
@@ -344,13 +348,25 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
             deployment = None
 
             if job.get("model_deployment_id") is not None:
-                deployment = update_deployment_status_with_cursor(
-                    cur,
-                    job["model_deployment_id"],
-                    "failed",
+                current = fetch_deployment_for_job_with_cursor(cur, job)
+                if current is not None and is_stale_job(job, current):
+                    cur.execute(
+                        queries.get("mark_deployment_job_skipped"),
+                        {"deployment_job_id": job["deployment_job_id"]},
+                    )
+                    return
+
+                deployment = (
+                    update_deployment_status_with_cursor(
+                        cur,
+                        job["model_deployment_id"],
+                        "failed",
+                    )
+                    if permanent_failure
+                    else current
                 )
 
-            if deployment is not None:
+            if deployment is not None and permanent_failure:
                 create_model_event_with_cursor(
                     cur,
                     deployment,
@@ -375,6 +391,21 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
                     ),
                 },
             )
+
+
+def fetch_deployment_for_job_with_cursor(
+    cur: Any,
+    job: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Load the current deployment row inside an existing transaction."""
+    cur.execute(
+        queries.get("get_model_deployment_by_id"),
+        {
+            "project_id": job["project_id"],
+            "model_deployment_id": job["model_deployment_id"],
+        },
+    )
+    return cur.fetchone()
 
 
 def should_fail_permanently(job: dict[str, Any]) -> bool:

@@ -1,0 +1,32 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Inference - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Data plane</p><h1>Chat completions</h1></div>
+</section>
+<section class="panel subtle">
+  <p class="muted">
+    Use the project-local deployment name in the Model field. In local
+    development with <code>make run-api</code>, MiniTen forwards inference
+    through a temporary <code>kubectl port-forward</code> when needed.
+  </p>
+</section>
+<form method="post" class="settings-form" autocomplete="off">
+  <section class="panel">
+    <div class="form-grid">
+      <label>Project API key <input name="api_key" type="text" value="{{ form.api_key }}" required autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true"></label>
+      <label>Model <input name="model" value="{{ form.model }}" required placeholder="qwen-small-prod" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <label>Max tokens <input name="max_tokens" type="number" min="1" value="{{ form.max_tokens }}"></label>
+      <label>Temperature <input name="temperature" type="number" step="0.1" min="0" value="{{ form.temperature }}"></label>
+    </div>
+    <label>Prompt <textarea name="prompt" rows="5" required>{{ form.prompt }}</textarea></label>
+    <button type="submit">Send</button>
+  </section>
+</form>
+{% if response %}
+  <section class="panel">
+    <h2>Response</h2>
+    <pre>{{ response | tojson(indent=2) }}</pre>
+  </section>
+{% endif %}
+{% endblock %}

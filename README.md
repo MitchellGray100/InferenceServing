@@ -219,6 +219,184 @@ must start and end with an alphanumeric character
 
 ---
 
+## CLI
+
+The `miniten` CLI uses the same HTTP API as the dashboard and external clients.
+Control-plane commands use a user login token. Inference commands use a
+project API key.
+
+Top-level help:
+
+```text
+usage: miniten [-h]
+               {config,auth,projects,members,api-keys,models,inference,analytics}
+               ...
+
+MiniTen command-line client for the dashboard/API.
+
+positional arguments:
+  {config,auth,projects,members,api-keys,models,inference,analytics}
+
+options:
+  -h, --help            show this help message and exit
+
+command reference:
+  config set-url <url>
+  config show
+
+  auth register --email <email> [--password <password>]
+  auth login --email <email> [--password <password>]
+  auth logout
+  auth me
+  auth delete-user
+
+  projects create <name>
+  projects list
+  projects get <project-id>
+  projects delete <project-id>
+
+  members list <project-id>
+  members add <project-id> --email <email> --role {owner,member,viewer}
+  members update <project-id> <user-id> --role {owner,member,viewer}
+  members remove <project-id> <user-id>
+
+  api-keys create <project-id> <name> [--use]
+  api-keys list <project-id>
+  api-keys use <project-api-key>
+  api-keys revoke <project-id> <api-key-id>
+
+  models deploy <project-id> --name <name> --model-id <hf-model-id>
+      [--replicas <n>] [--cpu-request <value>] [--cpu-limit <value>]
+      [--memory-request <value>] [--memory-limit <value>] [--gpu-count <n>]
+      [--dtype <dtype>] [--max-model-len <tokens>]
+      [--autoscaling-enabled {true,false}] [--min-replicas <n>]
+      [--max-replicas <n>] [--target-cpu-utilization <percent>]
+      [--json <json-object>] [--idempotency-key <key>]
+  models list <project-id>
+  models get <project-id> <model-deployment-id>
+  models update <project-id> <model-deployment-id> [model settings options]
+      [--json <json-object>] [--idempotency-key <key>]
+  models start <project-id> <model-deployment-id> [--idempotency-key <key>]
+  models stop <project-id> <model-deployment-id> [--idempotency-key <key>]
+  models sync <project-id> <model-deployment-id> [--idempotency-key <key>]
+  models scale <project-id> <model-deployment-id> <replicas> [--idempotency-key <key>]
+  models delete <project-id> <model-deployment-id> [--idempotency-key <key>]
+  models jobs <project-id> <model-deployment-id>
+  models status <project-id> <model-deployment-id>
+  models logs <project-id> <model-name> [--tail <lines>]
+
+  inference chat [--api-key <project-api-key>] [--model <name>]
+      [--prompt <text>] [--max-tokens <n>] [--temperature <float>]
+      [--json <json-object>]
+  inference models [--api-key <project-api-key>]
+
+  analytics overview <project-id>
+  analytics metrics <project-id> <model-name> [--since <iso8601>]
+  analytics requests <project-id> <model-name> [--since <iso8601>]
+      [--limit <n>] [--status-code <code>]
+  analytics events <project-id> <model-name>
+
+Run `miniten <group> <command> -h` for detailed help on one command.
+```
+
+Configure the CLI to talk to the local API:
+
+```bash
+poetry run miniten config set-url http://127.0.0.1:8000
+poetry run miniten config show
+```
+
+Account commands:
+
+```bash
+poetry run miniten auth register --email user@example.com
+poetry run miniten auth login --email user@example.com
+poetry run miniten auth me
+poetry run miniten auth logout
+poetry run miniten auth delete-user
+```
+
+Project commands:
+
+```bash
+poetry run miniten projects create "Personal Models"
+poetry run miniten projects list
+poetry run miniten projects get <project-id>
+poetry run miniten projects delete <project-id>
+```
+
+Project member commands:
+
+```bash
+poetry run miniten members list <project-id>
+poetry run miniten members add <project-id> --email user@example.com --role member
+poetry run miniten members update <project-id> <user-id> --role viewer
+poetry run miniten members remove <project-id> <user-id>
+```
+
+Deploy and manage a model:
+
+```bash
+poetry run miniten models deploy <project-id> \
+  --name qwen-small-prod \
+  --model-id HuggingFaceTB/SmolLM2-135M-Instruct \
+  --replicas 1 \
+  --cpu-request 1 \
+  --cpu-limit 4 \
+  --memory-request 1Gi \
+  --memory-limit 6Gi \
+  --gpu-count 0 \
+  --dtype auto \
+  --max-model-len 256 \
+  --autoscaling-enabled false
+
+poetry run miniten models list <project-id>
+poetry run miniten models get <project-id> <model-deployment-id>
+poetry run miniten models update <project-id> <model-deployment-id> --max-model-len 512
+poetry run miniten models start <project-id> <model-deployment-id>
+poetry run miniten models stop <project-id> <model-deployment-id>
+poetry run miniten models sync <project-id> <model-deployment-id>
+poetry run miniten models scale <project-id> <model-deployment-id> 1
+poetry run miniten models delete <project-id> <model-deployment-id>
+poetry run miniten models jobs <project-id> <model-deployment-id>
+poetry run miniten models status <project-id> <model-deployment-id>
+poetry run miniten models logs <project-id> qwen-small-prod --tail 50
+```
+
+Create and use a project API key for inference:
+
+```bash
+poetry run miniten api-keys create <project-id> local-dev --use
+poetry run miniten api-keys list <project-id>
+poetry run miniten api-keys use <project-api-key>
+poetry run miniten api-keys revoke <project-id> <api-key-id>
+```
+
+Send inference requests through the CLI:
+
+```bash
+poetry run miniten inference chat \
+  --model qwen-small-prod \
+  --prompt "Explain Kubernetes in one sentence." \
+  --max-tokens 64 \
+  --temperature 0
+
+poetry run miniten inference models
+```
+
+Analytics commands:
+
+```bash
+poetry run miniten analytics overview <project-id>
+poetry run miniten analytics metrics <project-id> qwen-small-prod
+poetry run miniten analytics requests <project-id> qwen-small-prod --limit 20
+poetry run miniten analytics events <project-id> qwen-small-prod
+```
+
+The CLI stores local state in `~/.miniten/config.json` by default. Override the
+API URL, user token, project API key, or config path with `MINITEN_API_URL`,
+`MINITEN_ACCESS_TOKEN`, `MINITEN_PROJECT_API_KEY`, and `MINITEN_CLI_CONFIG`.
+
 ## Core API Examples
 
 ### Create User
@@ -708,11 +886,54 @@ make run-api
 make test-local-apis
 ```
 
+### Running the Web Dashboard
+
+Use `setup-web` when you want MiniTen to prepare the local environment, start
+the real Kubernetes worker, start the Flask API/dashboard server, and open the
+website automatically:
+
+```bash
+make setup-web
+```
+
+The dashboard runs at:
+
+```text
+http://127.0.0.1:8000
+```
+
+Use `open-dashboard` after setup when you only need to start or reopen the
+dashboard:
+
+```bash
+make open-dashboard
+```
+
+Use the manual flow when you want the API process in the foreground:
+
+```bash
+make setup-env
+make start-worker-real-k8s
+make run-api
+```
+
+Then open `http://127.0.0.1:8000` in your browser. `make setup-env` refuses to
+run while port `8000` is already listening because setup may restart Postgres;
+stop the API first or run `make clean-env`.
+
+To stop the background dashboard/API process and local Compose services:
+
+```bash
+make clean-env
+```
+
 Common development commands:
 
 ```bash
 make install
 make setup-env
+make setup-web
+make open-dashboard
 make clean-env
 make clean-kind
 make clean-all
@@ -724,6 +945,7 @@ make start-worker-real-k8s
 make test-local-apis
 make test-local-k8s
 make test-local-vllm
+make test-local-vllm-gpu
 make lint
 make tests
 make compile
@@ -735,6 +957,11 @@ Docker Compose, waits for it to accept connections, applies migrations,
 creates or reuses a local `kind` cluster named `miniten`, writes a Docker
 Compose kubeconfig to `.local/kube/config`, and starts the local Deployment
 Worker in dry-run mode.
+`make setup-web` runs `setup-env`, switches the deployment worker to real
+Kubernetes mode with `WORKER_DRY_RUN=false`, starts the local Flask
+API/dashboard in the background, waits for `http://127.0.0.1:8000`, and opens
+the website in your default browser. Use `make open-dashboard` after setup when
+you only need to start or reopen the dashboard.
 `make clean-env` stops Compose services, removes the local Postgres volume,
 and removes the local setup marker while preserving the `kind` cluster and its
 cached pod images. Use `make clean-kind` only when you intentionally want to
@@ -837,6 +1064,36 @@ node container's containerd image store, so they may not appear as ordinary host
 Docker images in Docker Desktop. `make clean-env` intentionally keeps that kind
 node image cache so large images such as vLLM are not redownloaded during normal
 local resets. `make clean-kind` and `make clean-all` delete that cache.
+
+GPU vLLM smoke workflow:
+
+```bash
+make setup-env
+make run-api
+make test-local-vllm-gpu
+```
+
+`make test-local-vllm-gpu` is the same real vLLM inference smoke test, but it
+requests one `nvidia.com/gpu`, uses `VLLM_TARGET_DEVICE=cuda`, and expects the
+managed GPU image `vllm/vllm-openai:latest`. The target verifies Docker can see
+a vLLM-compatible GPU, then verifies the active Kubernetes context advertises
+allocatable `nvidia.com/gpu`.
+
+Docker Desktop kind is intentionally rejected for this GPU path. Docker Desktop
+can run GPU containers with `docker run --gpus all`, but kind launches pods
+through containerd inside the kind node container; Docker Desktop's NVIDIA
+runtime injection does not propagate into that nested runtime, so vLLM pods
+schedule but fail CUDA/NVML initialization. Use a Linux/WSL Kubernetes cluster
+configured with NVIDIA container runtime/device plugin support for GPU smoke
+tests. Tune the GPU test with `MINITEN_GPU_PROBE_IMAGE`,
+`MINITEN_VLLM_GPU_TEST_MODEL_ID`, `MINITEN_VLLM_GPU_TEST_GPU_COUNT`, and
+`MINITEN_VLLM_GPU_TEST_DEVICE`.
+
+The GPU target also checks the Docker-visible GPU compute capability before
+deploying. Current prebuilt vLLM GPU images require modern NVIDIA GPUs, so older
+cards fail early instead of creating a Kubernetes pod that crashes during
+CUDA/NVML initialization. Use `make test-local-vllm` for the CPU vLLM path on
+unsupported local GPU backends.
 
 When Flask runs locally with `API_DEBUG=true`, inference routing uses
 `INFERENCE_LOCAL_PORT_FORWARD_URL` and the smoke test opens a temporary

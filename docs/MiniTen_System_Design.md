@@ -450,6 +450,25 @@ default: `make clean-env` resets Compose/Postgres and the setup marker but keeps
 the kind cluster. `make clean-kind` intentionally deletes the kind cluster and
 its image cache, and `make clean-all` performs both cleanup paths.
 
+`make test-local-vllm-gpu` is the dedicated local GPU smoke path. It reuses the
+real vLLM smoke test but sets `gpu_count=1`, `VLLM_TARGET_DEVICE=cuda`, and the
+managed GPU image path. Before deploying, it verifies Docker can see a
+vLLM-compatible GPU and verifies the active Kubernetes context advertises
+allocatable `nvidia.com/gpu`.
+
+Docker Desktop kind is intentionally rejected for this GPU path. Docker Desktop
+can run GPU containers with `docker run --gpus all`, but kind launches pods
+through containerd inside the kind node container. Docker Desktop's NVIDIA
+runtime injection does not propagate into that nested runtime, so vLLM pods can
+be scheduled but fail CUDA/NVML initialization. GPU smoke tests should run
+against a Linux/WSL Kubernetes cluster configured with NVIDIA container
+runtime/device-plugin support.
+The GPU smoke preflight also checks Docker-visible GPU compute capability before
+deploying because current prebuilt vLLM GPU images require modern NVIDIA GPU
+architectures. Pascal-era cards such as GTX 1080 Ti fail this preflight and
+should use the CPU vLLM smoke path unless a custom Pascal-compatible vLLM image
+is supplied.
+
 The Deployment Worker:
 
 - Polls `deployment_jobs`.

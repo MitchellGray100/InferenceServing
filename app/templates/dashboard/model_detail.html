@@ -1,0 +1,65 @@
+{% extends "dashboard/base.html" %}
+{% block title %}{{ model.name }} - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">{{ project.name }} · {{ model.status }}</p>
+    <h1>{{ model.name }}</h1>
+    <p class="muted">{{ model.model_id }}</p>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}">Back to project</a>
+    <a class="button secondary" href="{{ url_for('dashboard.model_logs', project_id=project.projectID, model_name=model.name) }}">Logs</a>
+    <a class="button secondary" href="{{ url_for('dashboard.model_analytics', project_id=project.projectID, model_name=model.name) }}">Analytics</a>
+  </div>
+</section>
+
+<section
+  class="toolbar"
+  data-auto-sync-url="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='sync') }}"
+  data-auto-sync-interval-ms="120000"
+>
+  {% if model.status == "failed" %}
+    <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='retry') }}">
+      <button type="submit">Retry</button>
+    </form>
+  {% endif %}
+  {% for command in ["start", "stop", "sync"] %}
+    <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command=command) }}">
+      <button type="submit">{{ command|capitalize }}</button>
+    </form>
+  {% endfor %}
+  <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='scale') }}" class="inline-form">
+    <input name="replicas" type="number" min="0" value="{{ model.replicas }}" aria-label="Replicas">
+    <button type="submit">Scale</button>
+  </form>
+  <form method="post" action="{{ url_for('dashboard.model_command', project_id=project.projectID, model_id=model.modelDeploymentID, command='delete') }}" data-confirm={{ ('Delete model ' ~ model.name ~ '? This queues Kubernetes cleanup and cannot be undone.')|tojson }}>
+    <button class="danger" type="submit">Delete</button>
+  </form>
+</section>
+
+<form method="post" class="settings-form">
+  {% include "dashboard/model_settings_fields.html" %}
+  <button type="submit">Save settings</button>
+</form>
+
+<section class="grid two">
+  <div class="panel">
+    <h2>Live status</h2>
+    <pre>{{ status.kubernetes | tojson(indent=2) }}</pre>
+  </div>
+  <div class="panel">
+    <h2>Jobs</h2>
+    <table>
+      <thead><tr><th>Type</th><th>Status</th><th>Generation</th></tr></thead>
+      <tbody>
+        {% for job in jobs %}
+          <tr><td>{{ job.job_type }}</td><td>{{ job.status }}</td><td>{{ job.desired_generation }}</td></tr>
+        {% else %}
+          <tr><td colspan="3" class="empty">No jobs.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

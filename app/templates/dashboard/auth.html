@@ -1,0 +1,17 @@
+{% extends "dashboard/public.html" %}
+{% block title %}{{ "Register" if mode == "register" else "Log in" }} - MiniTen{% endblock %}
+{% block content %}
+<section class="auth-panel">
+  <h1>{{ "Create account" if mode == "register" else "Log in" }}</h1>
+  <form method="post" class="form-stack">
+    <label>Email <input name="email" type="email" autocomplete="email" value="{{ email or '' }}" required></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">{{ "Create account" if mode == "register" else "Log in" }}</button>
+  </form>
+  {% if mode == "register" %}
+    <p class="muted">Already have an account? <a href="{{ url_for('dashboard.login') }}">Log in</a>.</p>
+  {% else %}
+    <p class="muted">Need an account? <a href="{{ url_for('dashboard.register') }}">Create one</a>.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -92,8 +92,11 @@ def delete_model_deployment(
     so cached model weights survive stop/delete retries until product policy
     says otherwise.
     """
-    names = build_model_resource_names(deployment["k8s_namespace"], deployment["name"])
-    namespace = names["k8s_namespace"]
+    names = build_model_resource_names(
+        deployment["k8s_namespace"],
+        deployment["k8s_service_name"],
+    )
+    namespace = deployment["k8s_namespace"]
     logger.info(
         "Deleting Kubernetes model resources model_deployment_id=%s namespace=%s deployment=%s delete_cache=%s.",
         deployment.get("model_deployment_id"),

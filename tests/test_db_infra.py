@@ -58,12 +58,19 @@ def test_load_migrations_returns_sorted_checksummed_files(tmp_path) -> None:
 
 def test_schema_enforces_and_names_unique_api_key_hash() -> None:
     """Regression test for the DB-level duplicate API key guard."""
-    schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+    initial_schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+    api_key_name_migration = (
+        migrate.migrations_dir() / "002_api_key_active_name_uniqueness.sql"
+    ).read_text(
         encoding="utf-8"
     )
 
-    assert "CONSTRAINT uq_api_keys_key_hash UNIQUE(key_hash)" in schema
-    assert "CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)" in schema
+    assert "CONSTRAINT uq_api_keys_key_hash UNIQUE(key_hash)" in initial_schema
+    assert "DROP CONSTRAINT IF EXISTS uq_api_keys_project_name" in api_key_name_migration
+    assert "CREATE UNIQUE INDEX uq_api_keys_project_active_name" in api_key_name_migration
+    assert "WHERE revoked_at IS NULL" in api_key_name_migration
 
 
 def test_get_applied_migrations_creates_table_and_returns_mapping() -> None:

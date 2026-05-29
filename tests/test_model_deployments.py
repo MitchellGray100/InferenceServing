@@ -304,6 +304,61 @@ def test_inspect_kubernetes_status_reports_unavailable(monkeypatch) -> None:
     assert response["reason"] == "cluster offline"
 
 
+def test_inspect_kubernetes_status_reports_pending_resources(monkeypatch) -> None:
+    class NotFound(Exception):
+        status = 404
+
+    monkeypatch.setattr(
+        model_deployment_service.k8s_client,
+        "create_clients",
+        lambda: "clients",
+    )
+    monkeypatch.setattr(
+        model_deployment_service.deployment_manager,
+        "inspect_model_readiness",
+        lambda clients, deployment, expected_replicas: (_ for _ in ()).throw(
+            NotFound("missing")
+        ),
+    )
+
+    response = model_deployment_service.inspect_kubernetes_status(
+        deployment_row_fixture()
+    )
+
+    assert response["available"] is False
+    assert "Deployment/qwen-small-prod-v1" in response["reason"]
+    assert "not visible yet" in response["reason"]
+    assert response["readiness"] is None
+
+
+def test_inspect_kubernetes_status_reports_missing_resources_after_failure(
+    monkeypatch,
+) -> None:
+    class NotFound(Exception):
+        status = 404
+
+    deployment = deployment_row_fixture()
+    deployment["status"] = "failed"
+    monkeypatch.setattr(
+        model_deployment_service.k8s_client,
+        "create_clients",
+        lambda: "clients",
+    )
+    monkeypatch.setattr(
+        model_deployment_service.deployment_manager,
+        "inspect_model_readiness",
+        lambda clients, deployment, expected_replicas: (_ for _ in ()).throw(
+            NotFound("missing")
+        ),
+    )
+
+    response = model_deployment_service.inspect_kubernetes_status(deployment)
+
+    assert response["available"] is False
+    assert "Deployment/qwen-small-prod-v1" in response["reason"]
+    assert "dry-run mode" in response["reason"]
+
+
 def test_parse_log_tail_rejects_bad_values() -> None:
     with pytest.raises(ApiError):
         model_deployment_service.parse_log_tail("1001")
@@ -453,7 +508,10 @@ def test_validate_deployment_spec_applies_defaults(app) -> None:
 
     assert spec["replicas"] == 1
     assert spec["cpu_request"] == "1"
-    assert spec["memory_limit"] == "8Gi"
+    assert spec["cpu_limit"] == "4"
+    assert spec["memory_request"] == "1Gi"
+    assert spec["memory_limit"] == "6Gi"
+    assert spec["vllm_max_model_len"] == 256
     assert spec["vllm_image"] == "vllm/vllm-openai-cpu:latest-x86_64"
     assert spec["autoscaling_enabled"] is False
     assert spec["min_replicas"] is None

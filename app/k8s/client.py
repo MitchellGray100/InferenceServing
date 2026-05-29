@@ -260,6 +260,12 @@ def delete_secret(clients: KubernetesClients, namespace: str, name: str) -> Any:
     )
 
 
+def delete_namespace(clients: KubernetesClients, namespace: str) -> Any:
+    """Delete a Namespace and ignore already-deleted resources."""
+    logger.debug("Deleting Kubernetes Namespace name=%s.", namespace)
+    return _delete_or_ignore_not_found(lambda: clients.core.delete_namespace(namespace))
+
+
 def _create_or_patch(create: Any, patch: Any) -> Any:
     """Create a resource, patching when the Kubernetes API reports conflict."""
     try:

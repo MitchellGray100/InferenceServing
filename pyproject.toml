@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "MiniTen inference serving control plane and API."
 authors = []
 readme = "README.md"
-package-mode = false
+packages = [{ include = "app" }]
+
+[tool.poetry.scripts]
+miniten = "app.cli:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0"

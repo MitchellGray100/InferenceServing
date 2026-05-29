@@ -212,16 +212,23 @@ def test_auth_service_login_rejects_missing_user_or_bad_password(monkeypatch) ->
 
 
 def test_project_service_create_list_get_delete(monkeypatch) -> None:
+    deleted_namespaces = []
     fake = FakeTransaction(
         fetchones=[
             project_row(),
             project_row(role="owner"),
             {"role": "owner"},
+            project_row(role="owner"),
             {"project_id": PROJECT_ID},
         ],
         fetchalls=[[project_row(role="owner")]],
     )
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        project_service,
+        "delete_project_kubernetes_namespace",
+        lambda namespace: deleted_namespaces.append(namespace),
+    )
 
     created = project_service.create_project(USER_ID, "Personal Models")
     listed = project_service.list_projects(USER_ID)
@@ -232,6 +239,31 @@ def test_project_service_create_list_get_delete(monkeypatch) -> None:
     assert listed["projects"][0]["projectID"] == PROJECT_ID
     assert fetched["role"] == "owner"
     assert deleted == {"deleted": True}
+    assert deleted_namespaces == ["miniten-personal-models"]
+
+
+def test_project_delete_keeps_db_row_when_kubernetes_cleanup_fails(monkeypatch) -> None:
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "owner"},
+            project_row(role="owner"),
+        ],
+    )
+    monkeypatch.setattr(project_service, "transaction", fake.transaction)
+
+    def fail_cleanup(namespace):
+        raise RuntimeError("kubernetes unavailable")
+
+    monkeypatch.setattr(
+        project_service,
+        "delete_project_kubernetes_namespace",
+        fail_cleanup,
+    )
+
+    with pytest.raises(RuntimeError):
+        project_service.delete_project(USER_ID, PROJECT_ID)
+
+    assert len(fake.cursor.executed) == 2
 
 
 def test_project_service_member_lifecycle(monkeypatch) -> None:
@@ -286,6 +318,11 @@ def test_project_service_validation_and_not_found_branches(monkeypatch) -> None:
 
     fake = FakeTransaction(fetchones=[None, {"role": "owner"}, None])
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        project_service,
+        "delete_project_kubernetes_namespace",
+        lambda namespace: None,
+    )
 
     with pytest.raises(ApiError):
         project_service.get_project(USER_ID, PROJECT_ID)
@@ -388,7 +425,7 @@ def test_api_key_service_unique_and_not_found_branches(monkeypatch, app) -> None
             {"role": "member"},
             None,
         ],
-        execute_errors=[None, UniqueViolation("uq_api_keys_project_name")],
+        execute_errors=[None, UniqueViolation("uq_api_keys_project_active_name")],
     )
     monkeypatch.setattr(api_key_service, "transaction", fake.transaction)
     monkeypatch.setattr(

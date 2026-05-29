@@ -12,6 +12,7 @@ from typing import Any
 from app.config import Config
 from app.db.pool import transaction
 from app.db.sql import load_queries
+from app.k8s import client as k8s_client
 from app.utils.errors import ApiError
 from app.utils.time import to_iso8601
 from app.utils.validation import (
@@ -113,8 +114,10 @@ def get_project(user_id: Any, project_id: Any) -> dict[str, Any]:
 def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
     """Delete a project when the current user is an owner.
 
-    Kubernetes namespace cleanup will be added with the deployment lifecycle
-    worker. For now, database cascades remove product metadata.
+    The project owns a Kubernetes namespace, so namespace deletion removes all
+    model pods, services, HPAs, PVCs, and secrets before database metadata is
+    removed. If Kubernetes cleanup fails, the database row is kept so operators
+    can retry deletion instead of orphaning resources.
     """
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
@@ -123,6 +126,20 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
         with conn.cursor() as cur:
             role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
             require_role(role, {"owner"})
+            project = get_project_for_user_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_user_id,
+            )
+
+    if project is None:
+        logger.info("Project delete missed project_id=%s.", canonical_project_id)
+        raise project_not_found_error()
+
+    delete_project_kubernetes_namespace(project["k8s_namespace"])
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
             cur.execute(
                 queries.get("delete_project"),
                 {"project_id": canonical_project_id},
@@ -139,6 +156,20 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
         canonical_user_id,
     )
     return {"deleted": True}
+
+
+def delete_project_kubernetes_namespace(k8s_namespace: str) -> None:
+    """Delete the project namespace unless the worker is in dry-run mode."""
+    if Config.WORKER_DRY_RUN:
+        logger.info(
+            "Dry-run skipped Kubernetes project namespace deletion namespace=%s.",
+            k8s_namespace,
+        )
+        return
+
+    clients = k8s_client.create_clients()
+    k8s_client.delete_namespace(clients, k8s_namespace)
+    logger.info("Deleted Kubernetes project namespace namespace=%s.", k8s_namespace)
 
 
 def list_project_members(user_id: Any, project_id: Any) -> dict[str, list[dict[str, Any]]]:
@@ -381,6 +412,18 @@ def get_project_member_with_cursor(cur: Any, project_id: str, user_id: str) -> A
     """Return project member details using an existing DB cursor."""
     cur.execute(
         queries.get("get_project_member"),
+        {
+            "project_id": project_id,
+            "user_id": user_id,
+        },
+    )
+    return cur.fetchone()
+
+
+def get_project_for_user_with_cursor(cur: Any, project_id: str, user_id: str) -> Any:
+    """Return project metadata plus the user's role using an existing DB cursor."""
+    cur.execute(
+        queries.get("get_project_for_user"),
         {
             "project_id": project_id,
             "user_id": user_id,

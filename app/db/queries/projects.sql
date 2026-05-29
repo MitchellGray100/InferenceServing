@@ -120,4 +120,4 @@ WHERE project_id = %(project_id)s
 -- product metadata tied to the project.
 DELETE FROM projects
 WHERE project_id = %(project_id)s
-RETURNING project_id;
+RETURNING project_id, k8s_namespace;

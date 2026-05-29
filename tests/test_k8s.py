@@ -98,10 +98,27 @@ def test_build_deployment_manifest() -> None:
     assert "--model" in container["args"]
     assert "Qwen/Qwen2.5-0.5B-Instruct" in container["args"]
     assert "--gpu-memory-utilization" in container["args"]
-    assert "0.25" in container["args"]
+    assert "0.15" in container["args"]
     assert container["ports"][0]["containerPort"] == VLLM_PORT
     assert container["volumeMounts"][0]["mountPath"] == HF_CACHE_MOUNT_PATH
     assert container["resources"]["requests"]["cpu"] == "2"
+    assert manifest["spec"]["template"]["metadata"]["annotations"] == {
+        "miniten.io/desired-generation": "1"
+    }
+
+
+def test_build_deployment_manifest_changes_pod_template_for_new_generation() -> None:
+    payload = deployment_payload()
+    payload["desired_generation"] = 7
+
+    manifest = build_deployment_manifest(payload)
+
+    assert (
+        manifest["spec"]["template"]["metadata"]["annotations"][
+            "miniten.io/desired-generation"
+        ]
+        == "7"
+    )
 
 
 def test_build_deployment_manifest_with_gpu_and_secret() -> None:
@@ -113,9 +130,55 @@ def test_build_deployment_manifest_with_gpu_and_secret() -> None:
 
     assert container["resources"]["limits"]["nvidia.com/gpu"] == 1
     assert "--gpu-memory-utilization" not in container["args"]
+    assert {"name": "VLLM_TARGET_DEVICE", "value": "cuda"} in container["env"]
     assert container["env"][-1]["valueFrom"]["secretKeyRef"]["name"] == (
         "qwen-small-prod-secrets"
     )
+
+
+def test_build_deployment_manifest_with_local_gpu_driver_mount(monkeypatch) -> None:
+    """Local kind GPU smoke tests can mount copied NVIDIA driver libraries."""
+    payload = deployment_payload()
+    payload["gpu_count"] = 1
+    monkeypatch.setattr(Config, "LOCAL_KIND_GPU_DRIVER_MOUNT", True)
+    monkeypatch.setattr(Config, "LOCAL_KIND_GPU_DRIVER_PATH", "/usr/local/nvidia/lib64")
+
+    manifest = build_deployment_manifest(payload)
+    pod_spec = manifest["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+
+    assert {
+        "name": "LD_LIBRARY_PATH",
+        "value": (
+            "/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:"
+            "/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:"
+            "/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu"
+        ),
+    } in container["env"]
+    assert {"name": "NVIDIA_VISIBLE_DEVICES", "value": "all"} in container["env"]
+    assert {
+        "name": "NVIDIA_DRIVER_CAPABILITIES",
+        "value": "compute,utility",
+    } in container["env"]
+    assert {"name": "CUDA_VISIBLE_DEVICES", "value": "0"} in container["env"]
+    assert {
+        "name": "local-nvidia-driver-libs",
+        "hostPath": {
+            "path": "/usr/local/nvidia/lib64",
+            "type": "Directory",
+        },
+    } in pod_spec["volumes"]
+    assert {
+        "name": "local-wsl-gpu-device",
+        "hostPath": {
+            "path": "/dev/dxg",
+            "type": "CharDevice",
+        },
+    } in pod_spec["volumes"]
+    assert {
+        "name": "local-wsl-gpu-device",
+        "mountPath": "/dev/dxg",
+    } in container["volumeMounts"]
 
 
 def test_build_deployment_manifest_with_vllm_device(monkeypatch) -> None:
@@ -197,6 +260,14 @@ def test_client_delete_ignores_not_found() -> None:
     clients = k8s_client.KubernetesClients(core=core, apps=FakeApps(), autoscaling=FakeHpa())
 
     assert k8s_client.delete_service(clients, "miniten-personal", "missing") is None
+
+
+def test_client_delete_namespace_ignores_not_found() -> None:
+    core = FakeCore(not_found_on_delete=True)
+    clients = k8s_client.KubernetesClients(core=core, apps=FakeApps(), autoscaling=FakeHpa())
+
+    assert k8s_client.delete_namespace(clients, "miniten-personal") is None
+    assert "delete_namespace" in core.calls
 
 
 def test_deployment_manager_apply_order() -> None:
@@ -518,6 +589,12 @@ class FakeCore:
 
     def delete_namespaced_secret(self, name, namespace):
         self.calls.append("delete_namespaced_secret")
+        return None
+
+    def delete_namespace(self, namespace):
+        self.calls.append("delete_namespace")
+        if self.not_found_on_delete:
+            raise FakeApiException(404)
         return None
 
 

@@ -126,6 +126,73 @@ def test_build_vllm_url_uses_local_port_forward_in_debug() -> None:
         ) == "http://127.0.0.1:18080/v1/chat/completions"
 
 
+def test_upstream_request_failed_message_includes_local_port_forward_hint() -> None:
+    class DebugConfig(TestConfig):
+        API_DEBUG = True
+
+    app = create_app(DebugConfig)
+    with app.app_context():
+        message = inference_service.upstream_request_failed_message(deployment_row())
+
+    assert "kubectl port-forward" in message
+    assert "svc/qwen-small-prod" in message
+    assert "miniten-personal" in message
+
+
+def test_maybe_local_port_forward_starts_kubectl_when_needed(monkeypatch, app) -> None:
+    calls = []
+
+    class FakeProcess:
+        stdout = None
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            calls.append("terminate")
+
+        def wait(self, timeout):
+            calls.append(("wait", timeout))
+
+    def fake_popen(args, stdout, stderr, text):
+        calls.append(args)
+        return FakeProcess()
+
+    port_checks = iter([False, True])
+    monkeypatch.setattr(inference_service, "is_local_port_open", lambda port: next(port_checks))
+    monkeypatch.setattr(inference_service.subprocess, "Popen", fake_popen)
+
+    class DebugConfig(TestConfig):
+        API_DEBUG = True
+
+    debug_app = create_app(DebugConfig)
+    with debug_app.app_context():
+        with inference_service.maybe_local_port_forward(deployment_row()):
+            calls.append("inside")
+
+    assert calls[0][:3] == ["kubectl", "port-forward", "-n"]
+    assert "service/qwen-small-prod" in calls[0]
+    assert "inside" in calls
+    assert "terminate" in calls
+
+
+def test_maybe_local_port_forward_reuses_existing_forward(monkeypatch) -> None:
+    class DebugConfig(TestConfig):
+        API_DEBUG = True
+
+    debug_app = create_app(DebugConfig)
+    monkeypatch.setattr(inference_service, "is_local_port_open", lambda port: True)
+    monkeypatch.setattr(
+        inference_service.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("port-forward should not start"),
+    )
+
+    with debug_app.app_context():
+        with inference_service.maybe_local_port_forward(deployment_row()):
+            pass
+
+
 def test_ensure_deployment_running_rejects_non_running() -> None:
     with pytest.raises(ApiError) as error:
         inference_service.ensure_deployment_running(deployment_row(status="deploying"))

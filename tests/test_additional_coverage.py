@@ -488,14 +488,15 @@ def test_worker_mark_success_for_delete_marks_deleted(monkeypatch) -> None:
 
 
 def test_worker_failure_marks_retrying(monkeypatch) -> None:
-    fake = FakeTransaction(fetchone=deployment_row(status="failed"))
+    fake = FakeTransaction(fetchone=deployment_row(status="deploying"))
     events = []
+    status_updates = []
 
     monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
     monkeypatch.setattr(
         deployment_worker,
         "update_deployment_status_with_cursor",
-        lambda cur, model_deployment_id, status: deployment_row(status=status),
+        lambda cur, model_deployment_id, status: status_updates.append(status),
     )
     monkeypatch.setattr(
         deployment_worker,
@@ -508,7 +509,8 @@ def test_worker_failure_marks_retrying(monkeypatch) -> None:
         RuntimeError("temporary"),
     )
 
-    assert events[0]["will_retry"] is True
+    assert events == []
+    assert status_updates == []
     assert fake.cursor.executed[-1]["last_error"] == "unknown: temporary"
 
 

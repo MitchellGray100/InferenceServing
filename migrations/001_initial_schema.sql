@@ -91,9 +91,7 @@ CREATE TABLE model_deployments (
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP,
-
-  UNIQUE(project_id, name)
+  deleted_at TIMESTAMP
 );
 
 -- Project-scoped inference API keys. Raw key values are returned only once by
@@ -246,6 +244,10 @@ ON project_members(project_id);
 
 CREATE INDEX idx_model_deployments_project_id
 ON model_deployments(project_id);
+
+CREATE UNIQUE INDEX uq_model_deployments_active_project_name
+ON model_deployments(project_id, name)
+WHERE deleted_at IS NULL;
 
 CREATE INDEX idx_model_deployments_model_id
 ON model_deployments(model_id);

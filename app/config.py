@@ -34,7 +34,15 @@ class Config:
     VLLM_IMAGE = os.getenv("VLLM_IMAGE", "vllm/vllm-openai:latest")
     VLLM_CPU_IMAGE = os.getenv("VLLM_CPU_IMAGE", "vllm/vllm-openai-cpu:latest-x86_64")
     VLLM_DEVICE = os.getenv("VLLM_DEVICE")
-    VLLM_CPU_MEMORY_UTILIZATION = os.getenv("VLLM_CPU_MEMORY_UTILIZATION", "0.25")
+    LOCAL_KIND_GPU_DRIVER_MOUNT = os.getenv(
+        "LOCAL_KIND_GPU_DRIVER_MOUNT",
+        "false",
+    ).lower() in {"1", "true", "yes", "on"}
+    LOCAL_KIND_GPU_DRIVER_PATH = os.getenv(
+        "LOCAL_KIND_GPU_DRIVER_PATH",
+        "/usr/local/nvidia/lib64",
+    )
+    VLLM_CPU_MEMORY_UTILIZATION = os.getenv("VLLM_CPU_MEMORY_UTILIZATION", "0.15")
     VLLM_LOGGING_LEVEL = os.getenv("VLLM_LOGGING_LEVEL")
     DEFAULT_MODEL_REPLICAS = int(os.getenv("DEFAULT_MODEL_REPLICAS", "1"))
     DEFAULT_HPA_MIN_REPLICAS = int(os.getenv("DEFAULT_HPA_MIN_REPLICAS", "1"))
@@ -63,6 +71,7 @@ class Config:
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("API_PORT", "8000"))
     API_DEBUG = os.getenv("API_DEBUG", "true").lower() in {"1", "true", "yes", "on"}
+    API_RELOAD = os.getenv("API_RELOAD", "true").lower() in {"1", "true", "yes", "on"}
     WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "2"))
     WORKER_POLL_INTERVAL_SECONDS = float(
         os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2.0")

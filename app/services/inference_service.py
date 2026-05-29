@@ -7,7 +7,10 @@ forwards the request to that deployment's internal vLLM Service.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import socket
+import subprocess
 import time
 from typing import Any
 
@@ -25,6 +28,7 @@ queries = load_queries()
 logger = logging.getLogger(__name__)
 VLLM_PORT = 8000
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+DEFAULT_LOCAL_PORT_FORWARD_PORT = 18080
 
 
 def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
@@ -65,11 +69,12 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
             deployment["model_deployment_id"],
             model_name,
         )
-        upstream_response = requests.post(
-            url,
-            json=data,
-            timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
-        )
+        with maybe_local_port_forward(deployment):
+            upstream_response = requests.post(
+                url,
+                json=data,
+                timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
+            )
         status_code = upstream_response.status_code
         response_body = parse_upstream_json(upstream_response)
         error_type = classify_upstream_status(status_code)
@@ -105,7 +110,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
         )
         raise ApiError(
             type="upstream_error",
-            message="Model service request failed.",
+            message=upstream_request_failed_message(deployment),
             status_code=502,
         ) from exc
     except ValueError as exc:
@@ -237,6 +242,86 @@ def build_vllm_url(deployment: dict[str, Any], path: str) -> str:
     return (
         f"http://{service_name}.{namespace}.svc.cluster.local:"
         f"{VLLM_PORT}{normalized_path}"
+    )
+
+
+@contextlib.contextmanager
+def maybe_local_port_forward(deployment: dict[str, Any]):
+    """Start a temporary port-forward for host-run local API inference."""
+    if not should_auto_port_forward():
+        yield
+        return
+
+    port = DEFAULT_LOCAL_PORT_FORWARD_PORT
+    if is_local_port_open(port):
+        yield
+        return
+
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            "-n",
+            deployment["k8s_namespace"],
+            f"service/{deployment['k8s_service_name']}",
+            f"{port}:{VLLM_PORT}",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        wait_for_local_port_forward(process, port)
+        yield
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
+def should_auto_port_forward() -> bool:
+    """Return whether local debug inference should manage kubectl port-forward."""
+    return bool(current_app.config.get("API_DEBUG")) and not current_app.config.get(
+        "INFERENCE_LOCAL_PORT_FORWARD_URL"
+    )
+
+
+def is_local_port_open(port: int) -> bool:
+    """Return whether localhost already accepts connections on a port."""
+    with socket.socket() as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def wait_for_local_port_forward(process: subprocess.Popen, port: int) -> None:
+    """Wait until kubectl port-forward accepts localhost connections."""
+    for _ in range(30):
+        if process.poll() is not None:
+            output = process.stdout.read() if process.stdout else ""
+            raise requests.ConnectionError(
+                f"kubectl port-forward exited early: {output}"
+            )
+        if is_local_port_open(port):
+            return
+        time.sleep(0.2)
+    raise requests.ConnectionError("Timed out waiting for kubectl port-forward.")
+
+
+def upstream_request_failed_message(deployment: dict[str, Any]) -> str:
+    """Build an actionable error for model service connection failures."""
+    base = "Model service request failed."
+    if not current_app.config.get("API_DEBUG"):
+        return base
+
+    namespace = deployment["k8s_namespace"]
+    service_name = deployment["k8s_service_name"]
+    return (
+        f"{base} Local API development routes inference through "
+        "http://127.0.0.1:18080 by default. MiniTen tried to start a temporary "
+        "port-forward automatically. To debug manually, run: "
+        f"kubectl port-forward -n {namespace} svc/{service_name} 18080:8000"
     )
 
 

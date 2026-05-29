@@ -54,9 +54,9 @@ JOB_TYPES = {
 # the control plane without requiring GPU hardware or large worker nodes. Real
 # deployment sizing can be tightened once the Kubernetes worker is implemented.
 DEFAULT_CPU_REQUEST = "1"
-DEFAULT_CPU_LIMIT = "2"
-DEFAULT_MEMORY_REQUEST = "4Gi"
-DEFAULT_MEMORY_LIMIT = "8Gi"
+DEFAULT_CPU_LIMIT = "4"
+DEFAULT_MEMORY_REQUEST = "1Gi"
+DEFAULT_MEMORY_LIMIT = "6Gi"
 MAX_MODEL_ID_LENGTH = 255
 MAX_RESOURCE_TEXT_LENGTH = 32
 MAX_VLLM_DTYPE_LENGTH = 32
@@ -113,6 +113,13 @@ def create_model_deployment(
             require_role(project["role"] if project else None, WRITE_ROLES)
 
             try:
+                cur.execute(
+                    queries.get("release_deleted_model_deployment_name"),
+                    {
+                        "project_id": canonical_project_id,
+                        "name": spec["name"],
+                    },
+                )
                 # The request handler records the desired state only. The
                 # deployment worker will later create the namespace, PVC,
                 # Deployment, Service, HPA, and optional Secret in Kubernetes.
@@ -567,14 +574,56 @@ def delete_model_deployment(
     Kubernetes resources, and the database keeps command history through
     `deployment_jobs`.
     """
-    return lifecycle_command(
-        user_id,
-        project_id,
-        model_deployment_id,
-        job_type=JOB_TYPES["delete"],
-        requested_status="deleting",
-        payload_extra={},
+    canonical_user_id = validate_uuid(user_id, "userID")
+    canonical_project_id = validate_uuid(project_id, "projectID")
+    canonical_model_deployment_id = validate_uuid(model_deployment_id, "modelDeploymentID")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            role = get_project_role_with_cursor(cur, canonical_project_id, canonical_user_id)
+            require_role(role, WRITE_ROLES)
+            current = get_model_deployment_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+            )
+
+            if current is None:
+                logger.info(
+                    "Delete model deployment missed model_deployment_id=%s project_id=%s.",
+                    canonical_model_deployment_id,
+                    canonical_project_id,
+                )
+                raise model_deployment_not_found_error()
+
+            payload_source = dict(current)
+            payload_source["status"] = "deleting"
+            payload_source["desired_generation"] = int(
+                payload_source.get("desired_generation", 1)
+            ) + 1
+            cur.execute(
+                queries.get("advance_model_deployment_delete_requested"),
+                {"model_deployment_id": canonical_model_deployment_id},
+            )
+            deployment = cur.fetchone()
+            job = enqueue_deployment_job_with_cursor(
+                cur,
+                canonical_project_id,
+                canonical_model_deployment_id,
+                JOB_TYPES["delete"],
+                build_job_payload(JOB_TYPES["delete"], payload_source),
+            )
+
+    logger.info(
+        "Enqueued delete model_deployment_id=%s project_id=%s job_id=%s.",
+        canonical_model_deployment_id,
+        canonical_project_id,
+        job["deployment_job_id"],
     )
+    return {
+        "modelDeployment": serialize_model_deployment(deployment),
+        "deploymentJob": serialize_deployment_job(job),
+    }
 
 
 def lifecycle_command(
@@ -760,7 +809,7 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
             vllm.get("dtype", "auto"),
         ),
         "vllm_max_model_len": validate_positive_int(
-            vllm.get("max_model_len", 4096),
+            vllm.get("max_model_len", 256),
             "max_model_len",
             max_value=MAX_MODEL_LEN,
         ),
@@ -957,6 +1006,20 @@ def inspect_kubernetes_status(deployment: dict[str, Any]) -> dict[str, Any]:
             deployment.get("model_deployment_id"),
             exc,
         )
+        if kubernetes_status_code(exc) == 404:
+            if deployment.get("status") in {"deploying", "deleting"}:
+                return {
+                    "available": False,
+                    "reason": pending_kubernetes_resource_reason(deployment),
+                    "readiness": None,
+                    "recentLogs": [],
+                }
+            return {
+                "available": False,
+                "reason": missing_kubernetes_resource_reason(deployment),
+                "readiness": None,
+                "recentLogs": [],
+            }
         return {
             "available": False,
             "reason": str(exc),
@@ -990,6 +1053,33 @@ def parse_log_tail(value: Any) -> int:
         "tail",
         min_value=1,
         max_value=MAX_LOG_TAIL_LINES,
+    )
+
+
+def kubernetes_status_code(exc: Exception) -> int | None:
+    """Return Kubernetes ApiException status without importing Kubernetes types."""
+    return getattr(exc, "status", None)
+
+
+def missing_kubernetes_resource_reason(deployment: dict[str, Any]) -> str:
+    """Build a concise message for DB deployments missing live resources."""
+    return (
+        "Kubernetes resources for this model were not found. Expected "
+        f"Deployment/{deployment['k8s_deployment_name']} in namespace "
+        f"{deployment['k8s_namespace']}. This usually means the model was "
+        "created while the worker was in dry-run mode, the kind cluster was "
+        "recreated, or the resources were deleted outside MiniTen. Start the "
+        "real Kubernetes worker and redeploy or sync the model."
+    )
+
+
+def pending_kubernetes_resource_reason(deployment: dict[str, Any]) -> str:
+    """Build a concise message while worker-created resources are not visible yet."""
+    return (
+        "Kubernetes resources for this model are not visible yet. Expected "
+        f"Deployment/{deployment['k8s_deployment_name']} in namespace "
+        f"{deployment['k8s_namespace']}. If the latest deployment job is still "
+        "queued or running, this is normal during deployment."
     )
 
 

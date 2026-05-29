@@ -344,6 +344,34 @@ def test_mark_job_skipped(monkeypatch) -> None:
     assert fake.cursor.executed[0]["deployment_job_id"] == JOB_ID
 
 
+def test_failed_stale_job_does_not_overwrite_newer_deployment(monkeypatch) -> None:
+    deployment = deployment_row()
+    deployment["desired_generation"] = 3
+    fake = FakeTransaction(fetchone=deployment)
+    job = job_row(attempts=0, max_attempts=3)
+    job["desired_generation"] = 2
+
+    monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
+
+    deployment_worker.mark_job_failed_or_retrying(job, RuntimeError("old failure"))
+
+    assert fake.cursor.executed[-1]["deployment_job_id"] == JOB_ID
+    assert all(params.get("status") != "failed" for params in fake.cursor.executed)
+
+
+def test_retrying_job_does_not_mark_deployment_failed(monkeypatch) -> None:
+    fake = FakeTransaction(fetchone=deployment_row())
+    monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
+
+    deployment_worker.mark_job_failed_or_retrying(
+        job_row(attempts=0, max_attempts=3),
+        RuntimeError("temporary Kubernetes failure"),
+    )
+
+    assert fake.cursor.executed[-1]["deployment_job_id"] == JOB_ID
+    assert all(params.get("status") != "failed" for params in fake.cursor.executed)
+
+
 class FakeClients:
     pass
 

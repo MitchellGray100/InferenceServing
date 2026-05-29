@@ -10,9 +10,10 @@ RUN pip install --no-cache-dir poetry
 # Copy the lock file with pyproject so dependency installs are reproducible.
 COPY pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false \
-    && poetry install --only main --no-interaction --no-ansi
+    && poetry install --only main --no-root --no-interaction --no-ansi
 
 COPY . .
+RUN poetry install --only main --no-interaction --no-ansi
 
 ENV PYTHONUNBUFFERED=1
 ENV API_PORT=8000

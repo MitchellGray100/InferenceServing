@@ -17,7 +17,12 @@ def main() -> None:
     """Run the Flask development server for local API testing."""
     # The built-in Flask server is convenient for local development only. The
     # Docker image and deployment examples use Gunicorn against `wsgi:app`.
-    app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.API_DEBUG)
+    app.run(
+        host=Config.API_HOST,
+        port=Config.API_PORT,
+        debug=Config.API_DEBUG,
+        use_reloader=Config.API_RELOAD,
+    )
 
 
 if __name__ == "__main__":

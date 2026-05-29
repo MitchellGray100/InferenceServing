@@ -252,6 +252,7 @@ def test_record_inference_request(monkeypatch) -> None:
         project_id=PROJECT_ID,
         model_deployment_id=MODEL_DEPLOYMENT_ID,
         api_key_id=API_KEY_ID,
+        api_key_prefix="mt_live_visible",
         status_code=200,
         latency_ms=10,
         error_type=None,
@@ -262,6 +263,7 @@ def test_record_inference_request(monkeypatch) -> None:
 
     assert fake.cursor.executed[0]["status_code"] == 200
     assert fake.cursor.executed[0]["streamed"] is False
+    assert fake.cursor.executed[0]["api_key_prefix"] == "mt_live_visible"
 
 
 def test_chat_completions_success_logs_request(monkeypatch, app) -> None:
@@ -297,6 +299,7 @@ def test_chat_completions_success_logs_request(monkeypatch, app) -> None:
     assert body == {"id": "chatcmpl_123"}
     assert records[0]["status_code"] == 200
     assert records[0]["error_type"] is None
+    assert "api_key_prefix" in records[0]
 
 
 def test_chat_completions_records_upstream_http_errors(monkeypatch, app) -> None:

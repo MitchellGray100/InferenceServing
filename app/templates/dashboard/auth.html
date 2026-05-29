@@ -2,6 +2,7 @@
 {% block title %}{{ "Register" if mode == "register" else "Log in" }} - MiniTen{% endblock %}
 {% block content %}
 <section class="auth-panel">
+  <img class="auth-logo" src="{{ url_for('static', filename='miniten-logo.png') }}" alt="MiniTen">
   <h1>{{ "Create account" if mode == "register" else "Log in" }}</h1>
   <form method="post" class="form-stack">
     <label>Email <input name="email" type="email" autocomplete="email" value="{{ email or '' }}" required></label>

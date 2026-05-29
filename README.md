@@ -207,6 +207,105 @@ For a low-memory local CPU deployment, use:
 The first vLLM startup can take a while because the model image and model files
 may need to download.
 
+## Application Tour
+
+The dashboard is organized around the same workflow exposed by the CLI: create
+an account, create a project, deploy a model, manage runtime state, and call the
+model through an OpenAI-compatible API.
+
+### Home
+
+![MiniTen home page](docs/HomePage.png)
+
+The home page is the entry point for local dashboard users. From here you can
+create an account or log in to an existing MiniTen account.
+
+### Account Creation
+
+![MiniTen account creation](docs/AccountCreation.png)
+
+The account creation page registers a dashboard user. User accounts own and
+manage projects, API keys, project members, and model deployments.
+
+### Login
+
+![MiniTen login](docs/AccountLogin.png)
+
+The login page creates the browser session used for project and model
+management. It preserves your email if login fails so retrying does not clear
+the form.
+
+### Projects
+
+![MiniTen projects page](docs/ProjectsPage.png)
+
+The Projects page lists the projects you can access, their Kubernetes
+namespaces, and your role in each project. It also lets you create new projects.
+A project is the main isolation boundary for API keys, members, model
+deployments, analytics, and Kubernetes resources.
+
+### Project Dashboard
+
+![MiniTen project dashboard](docs/IndividualProjectDashboard.png)
+
+The project dashboard is the main workspace for a project. It shows project
+totals, model deployments, project API keys, and project members. From this page
+you can deploy a model, open model analytics, create or revoke API keys, invite
+members, change member roles, remove members, and delete the project.
+
+### API Key Creation
+
+![MiniTen API key creation](docs/APIKeyCreationPage.png)
+
+API keys are project-scoped credentials used for inference requests. MiniTen
+shows the raw key only once when it is created. Later pages show safe metadata
+such as status and stored key prefix, but never the full credential.
+
+### Model Deployment
+
+![MiniTen model deployment page](docs/ModelDeploymentPage.png)
+
+The model deployment page manages one named model service. It shows the current
+status, Kubernetes readiness details, deployment jobs, and model settings. You
+can start, stop, retry, sync, scale, update, delete, view logs, and open
+analytics for the model. The live status box is scrollable so Kubernetes
+diagnostics stay readable without expanding the whole page.
+
+### Analytics
+
+![MiniTen analytics dashboard](docs/AnalyticsDashboard.png)
+
+The analytics page shows request counts, success/error totals, average latency,
+p95 latency, recent requests, and lifecycle events. Recent request rows include
+the stored API key prefix, status code, latency, route, error type, and request
+time. MiniTen stores request metadata only; prompts and model responses are not
+persisted.
+
+### Inference
+
+![MiniTen completed inference request](docs/CompletedInferenceRequest.png)
+
+The Inference page lets you test a deployed model from the browser with a
+project API key. It sends a non-streaming OpenAI-compatible chat completion
+request and displays the JSON response returned by the model service.
+
+### OpenAI SDK / Notebook Usage
+
+![MiniTen Jupyter demo](docs/jupyterDemo.png)
+
+MiniTen can also be called from client code using an OpenAI-compatible base URL.
+The notebook-style workflow uses the project API key, points the SDK at
+`http://127.0.0.1:8000/v1`, and sends requests to the MiniTen model deployment
+name.
+
+### Account
+
+![MiniTen account page](docs/AccountPage.png)
+
+The Account page shows account metadata and contains the account deletion
+control. Account deletion is separated from project management so destructive
+account-level actions are not mixed into the project list.
+
 ## CLI
 
 The `miniten` CLI uses the same HTTP API as the dashboard. Control-plane

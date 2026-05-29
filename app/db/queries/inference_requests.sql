@@ -12,6 +12,7 @@ INSERT INTO inference_requests (
   project_id,
   model_deployment_id,
   api_key_id,
+  api_key_prefix,
   status_code,
   latency_ms,
   error_type,
@@ -23,6 +24,7 @@ VALUES (
   %(project_id)s,
   %(model_deployment_id)s,
   %(api_key_id)s,
+  %(api_key_prefix)s,
   %(status_code)s,
   %(latency_ms)s,
   %(error_type)s,
@@ -34,12 +36,17 @@ RETURNING *;
 
 -- name: list_recent_inference_requests
 -- Return recent request records for model request history views.
-SELECT *
-FROM inference_requests
-WHERE model_deployment_id = %(model_deployment_id)s
-  AND (%(status_code)s::integer IS NULL OR status_code = %(status_code)s::integer)
-  AND (%(since)s::timestamp IS NULL OR created_at >= %(since)s::timestamp)
-ORDER BY created_at DESC
+SELECT
+  ir.*,
+  ak.name AS api_key_name,
+  COALESCE(ir.api_key_prefix, ak.key_prefix) AS api_key_prefix
+FROM inference_requests ir
+LEFT JOIN api_keys ak
+  ON ak.api_key_id = ir.api_key_id
+WHERE ir.model_deployment_id = %(model_deployment_id)s
+  AND (%(status_code)s::integer IS NULL OR ir.status_code = %(status_code)s::integer)
+  AND (%(since)s::timestamp IS NULL OR ir.created_at >= %(since)s::timestamp)
+ORDER BY ir.created_at DESC
 LIMIT %(limit)s;
 
 -- name: get_model_inference_metrics

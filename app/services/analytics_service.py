@@ -303,6 +303,8 @@ def serialize_inference_request(row: Any) -> dict[str, Any]:
         "projectID": str(row["project_id"]),
         "modelDeploymentID": str(row["model_deployment_id"]),
         "apiKeyID": str(row["api_key_id"]) if row["api_key_id"] is not None else None,
+        "apiKeyName": row.get("api_key_name"),
+        "apiKeyPrefix": row.get("api_key_prefix"),
         "status_code": row["status_code"],
         "latency_ms": row["latency_ms"],
         "error_type": row["error_type"],

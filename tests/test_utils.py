@@ -106,9 +106,13 @@ def test_validate_role_accepts_known_project_roles() -> None:
 
 def test_validate_positive_int_bounds() -> None:
     assert validate_positive_int(5, "limit", max_value=10) == 5
+    assert validate_positive_int("5", "limit", max_value=10) == 5
 
     with pytest.raises(ValidationError):
         validate_positive_int(True, "limit")
+
+    with pytest.raises(ValidationError):
+        validate_positive_int("not-an-int", "limit")
 
     with pytest.raises(ValidationError):
         validate_positive_int(11, "limit", max_value=10)

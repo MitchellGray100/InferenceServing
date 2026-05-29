@@ -30,11 +30,4 @@
   </table>
 </section>
 
-<section class="danger-zone">
-  <h2>Account</h2>
-  <p>{{ current_user.email }}</p>
-  <form method="post" action="{{ url_for('dashboard.delete_account') }}" data-confirm={{ 'Delete your MiniTen account? This cannot be undone.'|tojson }}>
-    <button class="danger" type="submit">Delete account</button>
-  </form>
-</section>
 {% endblock %}

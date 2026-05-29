@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}MiniTen{% endblock %}</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
     <script defer src="{{ url_for('static', filename='dashboard.js') }}"></script>
   </head>
@@ -15,6 +16,7 @@
       <nav class="nav">
         <a href="{{ url_for('dashboard.projects') }}">Projects</a>
         <a href="{{ url_for('dashboard.inference') }}">Inference</a>
+        <a href="{{ url_for('dashboard.account') }}">Account</a>
       </nav>
       <form method="post" action="{{ url_for('dashboard.logout') }}">
         <button class="ghost" type="submit">Log out</button>

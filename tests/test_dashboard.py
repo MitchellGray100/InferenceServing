@@ -144,6 +144,10 @@ def test_dashboard_index_renders_public_entry():
     assert response.status_code == 200
     assert b"MiniTen" in response.data
     assert b"Create account" in response.data
+    assert b'rel="icon" type="image/png"' in response.data
+    assert b"favicon.png" in response.data
+    assert b"miniten-logo.png" in response.data
+    assert b'class="public-logo"' in response.data
 
 
 def test_dashboard_projects_requires_login():
@@ -173,14 +177,38 @@ def test_flash_messages_can_be_dismissed(monkeypatch):
     assert b"Dismiss message" in response.data
 
 
+def test_login_page_shows_miniten_logo():
+    app = make_app()
+    response = app.test_client().get("/login")
+
+    assert response.status_code == 200
+    assert b"miniten-logo.png" in response.data
+    assert b'class="auth-logo"' in response.data
+
+
 def test_projects_page_lists_projects(monkeypatch):
     app = make_app()
     client = app.test_client()
-    user_id = login(client, app)
+    login(client, app)
     monkeypatch.setattr(
         "app.routes.dashboard.project_service.list_projects",
         lambda current_user_id: {"projects": [project()]},
     )
+
+    response = client.get("/projects")
+
+    assert response.status_code == 200
+    assert b"Personal Models" in response.data
+    assert b"miniten-logo.png" in response.data
+    assert b'aria-label="MiniTen home"' in response.data
+    assert b"Account" in response.data
+    assert b"Delete account" not in response.data
+
+
+def test_account_page_shows_account_controls(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    user_id = login(client, app)
     monkeypatch.setattr(
         "app.routes.dashboard.user_service.get_user",
         lambda current_user_id: {
@@ -191,12 +219,10 @@ def test_projects_page_lists_projects(monkeypatch):
         },
     )
 
-    response = client.get("/projects")
+    response = client.get("/account")
 
     assert response.status_code == 200
-    assert b"Personal Models" in response.data
-    assert b"miniten-logo.png" in response.data
-    assert b'aria-label="MiniTen home"' in response.data
+    assert b"user@example.com" in response.data
     assert b"Delete account" in response.data
     assert b'data-confirm="Delete your MiniTen account? This cannot be undone."' in response.data
 
@@ -233,7 +259,7 @@ def test_stale_dashboard_session_redirects_to_login(monkeypatch):
         lambda current_user_id: {"projects": []},
     )
 
-    response = client.get("/projects")
+    response = client.get("/account")
 
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
@@ -278,6 +304,10 @@ def test_project_detail_aligns_with_cli_command_groups(monkeypatch):
 
     assert response.status_code == 200
     assert b"Deploy model" in response.data
+    assert b"Refresh models" in response.data
+    assert b"Refresh API keys" in response.data
+    assert b"Refresh members" in response.data
+    assert b"/models/sync" not in response.data
     assert b"Delete project Personal Models?" in response.data
     assert b"data-confirm" in response.data
     assert b"API Keys" in response.data
@@ -354,6 +384,7 @@ def test_model_detail_delete_requires_confirmation_and_failed_retry(monkeypatch)
     assert b"Retry" in response.data
     assert b"Back to project" in response.data
     assert f'href="/projects/{project()["projectID"]}"'.encode() in response.data
+    assert b'class="live-status-box"' in response.data
     assert b"data-auto-sync-url" in response.data
     assert b'data-auto-sync-interval-ms="120000"' in response.data
     assert b"Refresh jobs and status" in response.data
@@ -433,7 +464,7 @@ def test_model_scale_form_calls_service(monkeypatch):
         {
             "project_id": project()["projectID"],
             "model_id": model()["modelDeploymentID"],
-            "replicas": "2",
+            "replicas": 2,
         }
     ]
 
@@ -484,6 +515,90 @@ def test_model_sync_fetch_is_quiet_background_response(monkeypatch):
 
     assert response.status_code == 204
     assert calls == [model()["modelDeploymentID"]]
+
+
+def test_model_analytics_has_back_to_project_button(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.analytics_service.get_model_metrics",
+        lambda user_id, project_id, model_name: {
+            "metrics": {
+                "request_count": 0,
+                "success_count": 0,
+                "error_count": 0,
+                "average_latency_ms": None,
+                "p95_latency_ms": None,
+                "last_request_at": None,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.analytics_service.list_model_requests",
+        lambda user_id, project_id, model_name, **filters: {
+            "requests": [
+                {
+                    "inferenceRequestID": "77777777-7777-7777-7777-777777777777",
+                    "projectID": project_id,
+                    "modelDeploymentID": model()["modelDeploymentID"],
+                    "apiKeyID": "44444444-4444-4444-4444-444444444444",
+                    "apiKeyName": "local",
+                    "apiKeyPrefix": "mt_live",
+                    "status_code": 200,
+                    "latency_ms": 42,
+                    "error_type": None,
+                    "request_path": "/v1/chat/completions",
+                    "method": "POST",
+                    "streamed": False,
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.analytics_service.list_model_events",
+        lambda user_id, project_id, model_name: {"events": []},
+    )
+
+    response = client.get(f"/projects/{project()['projectID']}/analytics/qwen")
+
+    assert response.status_code == 200
+    assert b"Back to project" in response.data
+    assert f'href="/projects/{project()["projectID"]}"'.encode() in response.data
+    assert b"analytics-stats" in response.data
+    assert b"table-scroll" in response.data
+    assert b"analytics-scroll" in response.data
+    assert b"P95 latency" in response.data
+    assert b"Last request" in response.data
+    assert b"API key" in response.data
+    assert b"local" not in response.data
+    assert b"mt_live" in response.data
+    assert b"POST /v1/chat/completions" in response.data
+
+
+def test_model_logs_has_back_to_project_button(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.list_model_logs",
+        lambda user_id, project_id, model_name, tail: {"logs": []},
+    )
+
+    response = client.get(f"/projects/{project()['projectID']}/models/qwen/logs")
+
+    assert response.status_code == 200
+    assert b"Back to project" in response.data
+    assert f'href="/projects/{project()["projectID"]}"'.encode() in response.data
 
 
 def test_inference_page_posts_chat_completion(monkeypatch):

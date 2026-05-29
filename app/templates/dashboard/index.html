@@ -2,6 +2,7 @@
 {% block title %}MiniTen{% endblock %}
 {% block content %}
 <section class="hero">
+  <img class="public-logo" src="{{ url_for('static', filename='miniten-logo.png') }}" alt="MiniTen">
   <p class="eyebrow">Open-source model serving</p>
   <h1>MiniTen</h1>
   <p class="lede">Deploy Hugging Face models as named vLLM services, manage lifecycle jobs, and call them through OpenAI-compatible endpoints.</p>

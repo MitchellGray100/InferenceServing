@@ -92,6 +92,26 @@ def optional_int(value: str | None) -> int | None:
     return int(value)
 
 
+def required_int(value: str | None, field: str) -> int:
+    """Convert required numeric form input into int or raise an API error."""
+    if value is None or value == "":
+        raise ApiError(
+            type="validation_error",
+            message=f"{field} is required.",
+            status_code=400,
+            details={"field": field},
+        )
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ApiError(
+            type="validation_error",
+            message=f"{field} must be an integer.",
+            status_code=400,
+            details={"field": field},
+        ) from exc
+
+
 def bool_field(value: str | None) -> bool | None:
     """Convert optional boolean select values into bool or None."""
     if value == "":
@@ -211,6 +231,16 @@ def delete_account() -> Any:
     return run_form_action("Account deleted.", url_for("dashboard.login"), action)
 
 
+@bp.get("/account")
+@require_dashboard_user
+def account() -> Any:
+    """Show account details and account deletion controls."""
+    return render_template(
+        "dashboard/account.html",
+        current_user=user_service.get_user(user_id()),
+    )
+
+
 @bp.route("/projects", methods=["GET", "POST"])
 @require_dashboard_user
 def projects() -> Any:
@@ -226,7 +256,6 @@ def projects() -> Any:
     return render_template(
         "dashboard/projects.html",
         projects=response["projects"],
-        current_user=user_service.get_user(user_id()),
     )
 
 
@@ -429,7 +458,7 @@ def model_command(project_id: str, model_id: str, command: str) -> Any:
             user_id(),
             project_id,
             model_id,
-            request.form.get("replicas"),
+            required_int(request.form.get("replicas"), "replicas"),
         ),
         "delete": lambda: model_deployment_service.delete_model_deployment(
             user_id(),
@@ -462,14 +491,16 @@ def model_command(project_id: str, model_id: str, command: str) -> Any:
 @require_dashboard_user
 def model_logs(project_id: str, model_name: str) -> Any:
     """Show model logs by project-local model name."""
+    current = user_id()
     logs = model_deployment_service.list_model_logs(
-        user_id(),
+        current,
         project_id,
         model_name,
         tail=request.args.get("tail"),
     )
     return render_template(
         "dashboard/model_logs.html",
+        project=project_service.get_project(current, project_id),
         project_id=project_id,
         model_name=model_name,
         logs=logs["logs"],

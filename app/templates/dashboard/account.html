@@ -1,0 +1,30 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Account - MiniTen{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Account</p>
+    <h1>Account</h1>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Profile</h2>
+  <table>
+    <tbody>
+      <tr><th>Email</th><td>{{ current_user.email }}</td></tr>
+      <tr><th>User ID</th><td>{{ current_user.userID }}</td></tr>
+      <tr><th>Created</th><td>{{ current_user.created_at }}</td></tr>
+      <tr><th>Last login</th><td>{{ current_user.last_login_at or "Never" }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="danger-zone">
+  <h2>Delete account</h2>
+  <p class="muted">This removes your account and cannot be undone.</p>
+  <form method="post" action="{{ url_for('dashboard.delete_account') }}" data-confirm={{ 'Delete your MiniTen account? This cannot be undone.'|tojson }}>
+    <button class="danger" type="submit">Delete account</button>
+  </form>
+</section>
+{% endblock %}

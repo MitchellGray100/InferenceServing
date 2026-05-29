@@ -534,7 +534,11 @@ def test_api_key_service_authenticate_project_api_key(monkeypatch, app) -> None:
     with app.app_context():
         identity = api_key_service.authenticate_project_api_key("mt_live_visible_secret")
 
-    assert identity == {"apiKeyID": API_KEY_ID, "projectID": PROJECT_ID}
+    assert identity == {
+        "apiKeyID": API_KEY_ID,
+        "projectID": PROJECT_ID,
+        "apiKeyPrefix": "mt_live_visible",
+    }
 
 
 def test_api_key_service_authenticate_rejects_no_matching_hash(monkeypatch, app) -> None:

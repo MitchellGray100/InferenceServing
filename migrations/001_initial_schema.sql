@@ -124,6 +124,7 @@ CREATE TABLE inference_requests (
   model_deployment_id UUID NOT NULL REFERENCES model_deployments(model_deployment_id) ON DELETE CASCADE,
 
   api_key_id UUID REFERENCES api_keys(api_key_id) ON DELETE SET NULL,
+  api_key_prefix TEXT,
 
   status_code INTEGER,
   latency_ms INTEGER,

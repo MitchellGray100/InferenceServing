@@ -36,7 +36,7 @@ ORDER BY created_at DESC;
 -- name: find_active_api_keys_by_prefix
 -- Find active key candidates by visible prefix. The service still verifies the
 -- full raw key against key_hash before authenticating the request.
-SELECT api_key_id, project_id, key_hash, revoked_at
+SELECT api_key_id, project_id, key_prefix, key_hash, revoked_at
 FROM api_keys
 WHERE key_prefix = %(key_prefix)s
   AND revoked_at IS NULL;

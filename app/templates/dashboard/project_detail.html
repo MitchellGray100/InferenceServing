@@ -21,8 +21,16 @@
   <div><span>Errors</span><strong>{{ analytics.summary.error_count }}</strong></div>
 </section>
 
-<section class="table-section">
-  <div class="section-heading"><h2>Models</h2></div>
+<section class="table-section" id="models">
+  <div class="section-heading compact">
+    <h2>Models</h2>
+    <a
+      class="button secondary icon-button"
+      href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}#models"
+      aria-label="Refresh models"
+      title="Refresh models"
+    >&#8635;</a>
+  </div>
   <table>
     <thead><tr><th>Name</th><th>Model ID</th><th>Status</th><th>Replicas</th><th></th></tr></thead>
     <tbody>
@@ -44,8 +52,16 @@
 </section>
 
 <section class="grid two">
-  <div class="panel">
-    <h2>API Keys</h2>
+  <div class="panel" id="api-keys">
+    <div class="section-heading compact">
+      <h2>API Keys</h2>
+      <a
+        class="button secondary icon-button"
+        href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}#api-keys"
+        aria-label="Refresh API keys"
+        title="Refresh API keys"
+      >&#8635;</a>
+    </div>
     <form method="post" action="{{ url_for('dashboard.api_key_create', project_id=project.projectID) }}" class="inline-form">
       <input name="name" placeholder="Key name" required>
       <button type="submit">Create key</button>
@@ -78,8 +94,16 @@
       </tbody>
     </table>
   </div>
-  <div class="panel">
-    <h2>Members</h2>
+  <div class="panel" id="members">
+    <div class="section-heading compact">
+      <h2>Members</h2>
+      <a
+        class="button secondary icon-button"
+        href="{{ url_for('dashboard.project_detail', project_id=project.projectID) }}#members"
+        aria-label="Refresh members"
+        title="Refresh members"
+      >&#8635;</a>
+    </div>
     <form method="post" action="{{ url_for('dashboard.member_add', project_id=project.projectID) }}" class="inline-form wrap">
       <input name="email" placeholder="user@example.com" required>
       <select name="role">

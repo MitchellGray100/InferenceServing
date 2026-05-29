@@ -178,6 +178,11 @@ pre {
   white-space: pre-wrap;
 }
 
+.live-status-box {
+  max-height: 520px;
+  overflow: auto;
+}
+
 .topbar {
   align-items: center;
   background: #090d09;
@@ -239,6 +244,22 @@ pre {
 .hero {
   margin-top: 12vh;
   padding: 42px;
+}
+
+.public-logo {
+  display: block;
+  height: 62px;
+  margin-bottom: 22px;
+  object-fit: contain;
+  width: auto;
+}
+
+.auth-logo {
+  display: block;
+  height: 44px;
+  margin-bottom: 18px;
+  object-fit: contain;
+  width: auto;
 }
 
 .error-panel {
@@ -361,6 +382,49 @@ pre {
   font-size: 26px;
   line-height: 1.1;
   margin-top: 6px;
+}
+
+.analytics-stats {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.compact-value {
+  font-size: 14px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.wide-panel {
+  grid-column: 1 / -1;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.analytics-scroll {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.analytics-table {
+  min-width: 900px;
+}
+
+.metadata-primary,
+.metadata-secondary {
+  display: block;
+}
+
+.metadata-secondary,
+.timestamp {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.timestamp {
+  white-space: nowrap;
 }
 
 .messages {

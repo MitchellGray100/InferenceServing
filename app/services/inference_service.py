@@ -133,6 +133,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
             project_id=identity["projectID"],
             model_deployment_id=deployment["model_deployment_id"],
             api_key_id=identity["apiKeyID"],
+            api_key_prefix=identity.get("apiKeyPrefix"),
             status_code=status_code,
             latency_ms=latency_ms,
             error_type=error_type,
@@ -348,6 +349,7 @@ def record_inference_request(
     request_path: str,
     method: str,
     streamed: bool,
+    api_key_prefix: str | None = None,
 ) -> None:
     """Store lightweight request metadata without prompts or responses."""
     # This insert is used for analytics and debugging. It stores routing/status
@@ -360,6 +362,7 @@ def record_inference_request(
                     "project_id": project_id,
                     "model_deployment_id": model_deployment_id,
                     "api_key_id": api_key_id,
+                    "api_key_prefix": api_key_prefix,
                     "status_code": status_code,
                     "latency_ms": latency_ms,
                     "error_type": error_type,

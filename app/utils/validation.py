@@ -203,6 +203,15 @@ def validate_positive_int(
     max_value: int | None = None,
 ) -> int:
     """Validate an integer range used by pagination and resource settings."""
+    if isinstance(value, str):
+        try:
+            value = int(value)
+        except ValueError as exc:
+            raise ValidationError(
+                f"{field} must be an integer.",
+                details={"field": field},
+            ) from exc
+
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValidationError(
             f"{field} must be an integer.",

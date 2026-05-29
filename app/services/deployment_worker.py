@@ -150,6 +150,9 @@ def process_claimed_job(
         if is_stale_job(job, deployment):
             mark_job_skipped(job)
             return SKIPPED_STATUS
+        if is_noop_job(job):
+            mark_job_skipped(job)
+            return SKIPPED_STATUS
 
         dispatch_job(clients, job, deployment)
         mark_job_succeeded(job, deployment)
@@ -192,6 +195,27 @@ def is_stale_job(job: dict[str, Any], deployment: dict[str, Any]) -> bool:
     return int(job.get("desired_generation", 1)) != int(
         deployment.get("desired_generation", 1)
     )
+
+
+def is_noop_job(job: dict[str, Any]) -> bool:
+    """Return whether a queued lifecycle job was already satisfied."""
+    payload = job.get("payload") or {}
+    job_type = job["job_type"]
+
+    if job_type == "start_model":
+        return payload.get("previous_status") == "running"
+
+    if job_type == "stop_model":
+        return payload.get("previous_status") == "stopped"
+
+    if job_type == "scale_model":
+        previous_replicas = payload.get("previous_replicas")
+        requested_replicas = payload.get("replicas")
+        if previous_replicas is None or requested_replicas is None:
+            return False
+        return int(previous_replicas) == int(requested_replicas)
+
+    return False
 
 
 def dispatch_job(

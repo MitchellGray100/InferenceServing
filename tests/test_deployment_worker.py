@@ -122,6 +122,33 @@ def test_process_claimed_job_skips_stale_generation(monkeypatch) -> None:
     assert calls == ["skipped"]
 
 
+def test_process_claimed_job_skips_noop_lifecycle_job(monkeypatch) -> None:
+    calls = []
+    noop_job = job_row("stop_model")
+    noop_job["payload"] = {"previous_status": "stopped"}
+
+    monkeypatch.setattr(
+        deployment_worker,
+        "fetch_deployment_for_job",
+        lambda job: deployment_row(),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "dispatch_job",
+        lambda clients, job, deployment: calls.append("dispatch"),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "mark_job_skipped",
+        lambda job: calls.append("skipped"),
+    )
+
+    status = deployment_worker.process_claimed_job(FakeClients(), noop_job)
+
+    assert status == "skipped"
+    assert calls == ["skipped"]
+
+
 def test_is_stale_job_compares_desired_generation() -> None:
     assert deployment_worker.is_stale_job(job_row(), deployment_row()) is False
 
@@ -129,6 +156,20 @@ def test_is_stale_job_compares_desired_generation() -> None:
     stale_job["desired_generation"] = 1
 
     assert deployment_worker.is_stale_job(stale_job, deployment_row()) is True
+
+
+def test_is_noop_job_detects_already_satisfied_commands() -> None:
+    start = job_row("start_model")
+    start["payload"] = {"previous_status": "running"}
+    stop = job_row("stop_model")
+    stop["payload"] = {"previous_status": "stopped"}
+    scale = job_row("scale_model")
+    scale["payload"] = {"previous_replicas": 2, "replicas": 2}
+
+    assert deployment_worker.is_noop_job(start) is True
+    assert deployment_worker.is_noop_job(stop) is True
+    assert deployment_worker.is_noop_job(scale) is True
+    assert deployment_worker.is_noop_job(job_row("deploy_model")) is False
 
 
 def test_fetch_deployment_for_job_success(monkeypatch) -> None:

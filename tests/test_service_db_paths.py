@@ -151,9 +151,16 @@ def api_key_row(**overrides):
 
 
 def test_user_service_create_get_delete(monkeypatch) -> None:
-    fake = FakeTransaction(fetchones=[user_row(), user_row(), {"user_id": USER_ID}])
+    fake = FakeTransaction(
+        fetchones=[user_row(), user_row(), user_row(), {"user_id": USER_ID}]
+    )
     monkeypatch.setattr(user_service, "transaction", fake.transaction)
     monkeypatch.setattr(user_service, "hash_password", lambda password: "hashed-password")
+    monkeypatch.setattr(
+        user_service.project_service,
+        "delete_sole_member_projects_for_user",
+        lambda user_id: [],
+    )
 
     created = user_service.create_user(" USER@EXAMPLE.COM ", "password123")
     fetched = user_service.get_user(USER_ID)
@@ -168,12 +175,34 @@ def test_user_service_create_get_delete(monkeypatch) -> None:
 def test_user_service_not_found_errors(monkeypatch) -> None:
     fake = FakeTransaction(fetchones=[None, None])
     monkeypatch.setattr(user_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        user_service.project_service,
+        "delete_sole_member_projects_for_user",
+        lambda user_id: pytest.fail("project cleanup should not run for missing users"),
+    )
 
     with pytest.raises(ApiError):
         user_service.get_user(USER_ID)
 
     with pytest.raises(ApiError):
         user_service.delete_user(USER_ID)
+
+
+def test_user_delete_removes_sole_member_projects_before_account(monkeypatch) -> None:
+    fake = FakeTransaction(fetchones=[user_row(), {"user_id": USER_ID}])
+    cleanup_calls = []
+    monkeypatch.setattr(user_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        user_service.project_service,
+        "delete_sole_member_projects_for_user",
+        lambda user_id: cleanup_calls.append(user_id) or [project_row()],
+    )
+
+    deleted = user_service.delete_user(USER_ID)
+
+    assert deleted == {"deleted": True}
+    assert cleanup_calls == [USER_ID]
+    assert fake.cursor.executed[-1][1] == {"user_id": USER_ID}
 
 
 def test_user_service_unique_violation(monkeypatch) -> None:
@@ -264,6 +293,46 @@ def test_project_delete_keeps_db_row_when_kubernetes_cleanup_fails(monkeypatch) 
         project_service.delete_project(USER_ID, PROJECT_ID)
 
     assert len(fake.cursor.executed) == 2
+
+
+def test_project_service_deletes_sole_member_projects(monkeypatch) -> None:
+    deleted_namespaces = []
+    fake = FakeTransaction(
+        fetchones=[{"project_id": PROJECT_ID}],
+        fetchalls=[[project_row(role="owner")]],
+    )
+    monkeypatch.setattr(project_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        project_service,
+        "delete_project_kubernetes_namespace",
+        lambda namespace: deleted_namespaces.append(namespace),
+    )
+
+    deleted = project_service.delete_sole_member_projects_for_user(USER_ID)
+
+    assert deleted[0]["projectID"] == PROJECT_ID
+    assert deleted_namespaces == ["miniten-personal-models"]
+
+
+def test_project_service_keeps_sole_member_project_db_when_cleanup_fails(
+    monkeypatch,
+) -> None:
+    fake = FakeTransaction(fetchalls=[[project_row(role="owner")]])
+    monkeypatch.setattr(project_service, "transaction", fake.transaction)
+
+    def fail_cleanup(namespace):
+        raise RuntimeError("kubernetes unavailable")
+
+    monkeypatch.setattr(
+        project_service,
+        "delete_project_kubernetes_namespace",
+        fail_cleanup,
+    )
+
+    with pytest.raises(RuntimeError):
+        project_service.delete_sole_member_projects_for_user(USER_ID)
+
+    assert len(fake.cursor.executed) == 1
 
 
 def test_project_service_member_lifecycle(monkeypatch) -> None:
@@ -635,6 +704,80 @@ def test_model_deployment_service_create_list_get_commands(monkeypatch, app) -> 
     assert stopped["deploymentJob"]["job_type"] == "stop_model"
     assert scaled["modelDeployment"]["replicas"] == 3
     assert deleted["deploymentJob"]["job_type"] == "delete_model"
+
+
+def test_model_stop_noop_queues_skipped_worker_job_without_status_advance(
+    monkeypatch,
+    app,
+) -> None:
+    queued_payloads = []
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "member"},
+            deployment_row(status="stopped"),
+        ],
+    )
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    def enqueue_job(cur, project_id, model_deployment_id, job_type, payload):
+        queued_payloads.append(payload)
+        return job_row(job_type=job_type)
+
+    monkeypatch.setattr(
+        model_deployment_service,
+        "enqueue_deployment_job_with_cursor",
+        enqueue_job,
+    )
+
+    with app.app_context():
+        stopped = model_deployment_service.stop_model_deployment(
+            USER_ID,
+            PROJECT_ID,
+            MODEL_DEPLOYMENT_ID,
+        )
+
+    assert stopped["modelDeployment"]["status"] == "stopped"
+    assert stopped["deploymentJob"]["job_type"] == "stop_model"
+    assert queued_payloads[0]["previous_status"] == "stopped"
+    assert all(params.get("status") != "stopped" for _, params in fake.cursor.executed)
+
+
+def test_model_scale_noop_queues_skipped_worker_job_without_generation_advance(
+    monkeypatch,
+    app,
+) -> None:
+    queued_payloads = []
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "member"},
+            deployment_row(replicas=3),
+        ],
+    )
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    def enqueue_job(cur, project_id, model_deployment_id, job_type, payload):
+        queued_payloads.append(payload)
+        return job_row(job_type=job_type)
+
+    monkeypatch.setattr(
+        model_deployment_service,
+        "enqueue_deployment_job_with_cursor",
+        enqueue_job,
+    )
+
+    with app.app_context():
+        scaled = model_deployment_service.scale_model_deployment(
+            USER_ID,
+            PROJECT_ID,
+            MODEL_DEPLOYMENT_ID,
+            3,
+        )
+
+    assert scaled["modelDeployment"]["replicas"] == 3
+    assert scaled["deploymentJob"]["job_type"] == "scale_model"
+    assert queued_payloads[0]["previous_replicas"] == 3
+    assert queued_payloads[0]["replicas"] == 3
+    assert all("replicas" not in params for _, params in fake.cursor.executed)
 
 
 def test_model_deployment_service_error_branches(monkeypatch, app) -> None:

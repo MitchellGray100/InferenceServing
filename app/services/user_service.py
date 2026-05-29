@@ -12,6 +12,7 @@ from typing import Any
 from app.db.pool import transaction
 from app.db.sql import load_queries
 from app.security.passwords import hash_password
+from app.services import project_service
 from app.utils.errors import ApiError
 from app.utils.time import to_iso8601
 from app.utils.validation import normalize_email, validate_password, validate_uuid
@@ -93,13 +94,32 @@ def get_user(user_id: Any) -> dict[str, Any]:
 def delete_user(user_id: Any) -> dict[str, bool]:
     """Delete the authenticated user account.
 
-    Related project memberships and owned metadata rely on schema-level foreign
-    keys/cascades. Higher-level cleanup, such as Kubernetes resources, belongs
-    in deployment worker flows.
+    Projects where this user is the only remaining member are deleted first so
+    Kubernetes namespaces and model resources are not orphaned.
     """
     # The current `/me` route supplies this ID from the bearer token, so callers
     # cannot delete arbitrary user IDs through the public API.
     canonical_user_id = validate_uuid(user_id, "userID")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("get_user_by_id"),
+                {"user_id": canonical_user_id},
+            )
+            existing_user = cur.fetchone()
+
+    if existing_user is None:
+        logger.info("User delete missed user_id=%s.", canonical_user_id)
+        raise ApiError(
+            type="user_not_found",
+            message="User not found.",
+            status_code=404,
+        )
+
+    deleted_projects = project_service.delete_sole_member_projects_for_user(
+        canonical_user_id
+    )
 
     with transaction() as conn:
         with conn.cursor() as cur:
@@ -119,7 +139,11 @@ def delete_user(user_id: Any) -> dict[str, bool]:
             status_code=404,
         )
 
-    logger.info("Deleted user user_id=%s.", canonical_user_id)
+    logger.info(
+        "Deleted user user_id=%s sole_member_projects_deleted=%s.",
+        canonical_user_id,
+        len(deleted_projects),
+    )
     return {"deleted": True}
 
 

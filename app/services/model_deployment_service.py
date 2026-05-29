@@ -443,14 +443,17 @@ def scale_model_deployment(
                 )
                 raise model_deployment_not_found_error()
 
-            cur.execute(
-                queries.get("advance_model_deployment_replicas"),
-                {
-                    "model_deployment_id": canonical_model_deployment_id,
-                    "replicas": desired_replicas,
-                },
-            )
-            deployment = cur.fetchone()
+            previous_replicas = int(deployment["replicas"])
+            if desired_replicas != previous_replicas:
+                cur.execute(
+                    queries.get("advance_model_deployment_replicas"),
+                    {
+                        "model_deployment_id": canonical_model_deployment_id,
+                        "replicas": desired_replicas,
+                    },
+                )
+                deployment = cur.fetchone()
+
             job = enqueue_deployment_job_with_cursor(
                 cur,
                 canonical_project_id,
@@ -459,7 +462,10 @@ def scale_model_deployment(
                 build_job_payload(
                     "scale_model",
                     deployment,
-                    {"replicas": desired_replicas},
+                    {
+                        "replicas": desired_replicas,
+                        "previous_replicas": previous_replicas,
+                    },
                 ),
             )
 
@@ -637,9 +643,9 @@ def lifecycle_command(
 ) -> dict[str, Any]:
     """Apply a simple status transition and enqueue a lifecycle job.
 
-    Start, stop, and delete all follow the same pattern: authorize against the
-    project, verify the deployment still exists, update the desired status, then
-    enqueue a durable job in the same transaction.
+    Start and stop commands enqueue a durable job even when the request is a
+    no-op. No-op jobs leave deployment state unchanged and are later marked
+    skipped by the worker.
     """
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
@@ -664,20 +670,27 @@ def lifecycle_command(
                 )
                 raise model_deployment_not_found_error()
 
-            cur.execute(
-                queries.get("advance_model_deployment_status"),
-                {
-                    "model_deployment_id": canonical_model_deployment_id,
-                    "status": requested_status,
-                },
-            )
-            deployment = cur.fetchone()
+            previous_status = deployment["status"]
+            if not is_noop_lifecycle_command(job_type, previous_status):
+                cur.execute(
+                    queries.get("advance_model_deployment_status"),
+                    {
+                        "model_deployment_id": canonical_model_deployment_id,
+                        "status": requested_status,
+                    },
+                )
+                deployment = cur.fetchone()
+
             job = enqueue_deployment_job_with_cursor(
                 cur,
                 canonical_project_id,
                 canonical_model_deployment_id,
                 job_type,
-                build_job_payload(job_type, deployment, payload_extra),
+                build_job_payload(
+                    job_type,
+                    deployment,
+                    {**payload_extra, "previous_status": previous_status},
+                ),
             )
 
     logger.info(
@@ -692,6 +705,13 @@ def lifecycle_command(
         "modelDeployment": serialize_model_deployment(deployment),
         "deploymentJob": serialize_deployment_job(job),
     }
+
+
+def is_noop_lifecycle_command(job_type: str, current_status: str) -> bool:
+    """Return whether a lifecycle command is already satisfied."""
+    return (job_type == JOB_TYPES["start"] and current_status == "running") or (
+        job_type == JOB_TYPES["stop"] and current_status == "stopped"
+    )
 
 
 def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:

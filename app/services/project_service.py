@@ -158,6 +158,48 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
     return {"deleted": True}
 
 
+def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
+    """Delete projects that would become orphaned by deleting a sole member.
+
+    Kubernetes namespaces are deleted before database rows. If any namespace
+    cleanup fails, project rows are left in place so account deletion can be
+    retried without losing track of live resources.
+    """
+    canonical_user_id = validate_uuid(user_id, "userID")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("list_sole_member_projects_for_user"),
+                {"user_id": canonical_user_id},
+            )
+            projects = cur.fetchall()
+
+    for project in projects:
+        delete_project_kubernetes_namespace(project["k8s_namespace"])
+
+    deleted_projects: list[dict[str, Any]] = []
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            for project in projects:
+                cur.execute(
+                    queries.get("delete_project"),
+                    {"project_id": project["project_id"]},
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    deleted_projects.append(serialize_project(project, role=project["role"]))
+
+    if deleted_projects:
+        logger.info(
+            "Deleted sole-member projects for user_id=%s count=%s.",
+            canonical_user_id,
+            len(deleted_projects),
+        )
+
+    return deleted_projects
+
+
 def delete_project_kubernetes_namespace(k8s_namespace: str) -> None:
     """Delete the project namespace unless the worker is in dry-run mode."""
     if Config.WORKER_DRY_RUN:

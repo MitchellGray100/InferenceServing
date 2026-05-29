@@ -34,6 +34,28 @@ JOIN project_members pm ON pm.project_id = p.project_id
 WHERE pm.user_id = %(user_id)s
 ORDER BY p.created_at DESC;
 
+-- name: list_sole_member_projects_for_user
+-- Find projects where the given user is the only remaining member. These
+-- projects become inaccessible after account deletion, so account deletion
+-- tears down their Kubernetes namespace and database metadata first.
+SELECT
+  p.project_id,
+  p.name,
+  p.slug,
+  p.k8s_namespace,
+  p.created_at,
+  pm.role
+FROM projects p
+JOIN project_members pm ON pm.project_id = p.project_id
+WHERE pm.user_id = %(user_id)s
+  AND NOT EXISTS (
+    SELECT 1
+    FROM project_members other_pm
+    WHERE other_pm.project_id = p.project_id
+      AND other_pm.user_id <> %(user_id)s
+  )
+ORDER BY p.created_at DESC;
+
 -- name: get_project_for_user
 -- Fetch one project only if the user is a member. This supports 404-style
 -- access hiding for projects outside the user's membership boundary.

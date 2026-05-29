@@ -354,6 +354,8 @@ def test_model_detail_delete_requires_confirmation_and_failed_retry(monkeypatch)
     assert f'href="/projects/{project()["projectID"]}"'.encode() in response.data
     assert b"data-auto-sync-url" in response.data
     assert b'data-auto-sync-interval-ms="120000"' in response.data
+    assert b"Refresh jobs and status" in response.data
+    assert b"&#8635;" in response.data
 
 
 def test_api_key_created_page_has_copy_button(monkeypatch):

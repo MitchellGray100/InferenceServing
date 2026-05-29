@@ -269,6 +269,24 @@ pre {
   flex-wrap: wrap;
 }
 
+.section-heading.compact {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.section-heading.compact h2 {
+  margin-bottom: 0;
+}
+
+.icon-button {
+  aspect-ratio: 1;
+  font-size: 18px;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0;
+  width: 34px;
+}
+
 .form-stack,
 .settings-form {
   display: grid;

@@ -1,231 +1,208 @@
-# Inference Serving (MiniTen)
+# MiniTen Inference Serving
 
-<img width="1112" height="362" alt="MiniTen logo" src="docs/miniten%20logo.png" />
-<img width="2211" height="1171" alt="MiniTen system design diagram" src="docs/MiniTen%20System%20Design.png" />
+MiniTen is a local-first inference serving platform for deploying Hugging Face
+LLMs as named vLLM workers on Kubernetes. It includes a Flask API, server-rendered
+web dashboard, CLI, Postgres metadata store, Kubernetes deployment worker, and
+OpenAI-compatible inference routes.
 
-MiniTen is a planned multi-user inference serving platform for deploying open-source Hugging Face LLMs as named vLLM workers on Kubernetes.
+The current project is an implemented MVP. It is intended to run locally with
+Docker, Docker Compose, and kind, with a later production path toward OCI/OKE.
 
-The project is designed to run locally first with `kind` or `minikube`, then later on Oracle Cloud Infrastructure using Oracle Kubernetes Engine.
+![MiniTen logo](docs/miniten%20logo.png)
 
-MiniTen provides a Baseten-inspired workflow for:
+## What It Does
 
-```text
-create account
-  ↓
-create/select project
-  ↓
-deploy named model
-  ↓
-manage model lifecycle
-  ↓
-call model through OpenAI-compatible HTTP APIs
+MiniTen lets you:
+
+- Create users and log in.
+- Create projects and manage project members.
+- Create project-scoped API keys for inference.
+- Deploy named model services backed by vLLM.
+- Start, stop, scale, retry, sync, and delete model deployments.
+- View model status, jobs, logs, analytics, and lifecycle events.
+- Send OpenAI-compatible `/v1/chat/completions` requests.
+- Use the same workflows from the web dashboard or `miniten` CLI.
+
+The Flask app is the control plane and request router. vLLM pods do the actual
+model inference.
+
+## Prerequisites
+
+Install these before running the project locally:
+
+- Python 3.12
+- Docker Desktop or Docker Engine
+- Docker Compose
+- `kind`
+- `kubectl`
+- `make`
+
+On Windows, the easiest way to install Kubernetes tools is:
+
+```powershell
+winget install --id Kubernetes.kind --exact
+winget install --id Kubernetes.kubectl --exact
 ```
 
----
+## Quick Start: Web Dashboard
 
-## Project Status
+This is the recommended local workflow.
 
-MiniTen is currently a design-stage / MVP-build project.
-
-The repository documents the planned:
-
-- API surface
-- database schema
-- system design
-- Kubernetes resource model
-- deployment and inference data flows
-
-Implementation should start with the Flask backend, Postgres schema/migrations, and local development setup before moving to Kubernetes and OKE.
-
----
-
-## MVP Goals
-
-MiniTen's MVP focuses on:
-
-- User account creation and login
-- Project-based isolation
-- Project membership and roles
-- Project-scoped API keys
-- Named model deployments
-- Hugging Face model IDs passed to vLLM
-- Kubernetes-managed vLLM workers
-- OpenAI-compatible inference endpoints
-- Lightweight analytics and lifecycle events
-- PVC-backed Hugging Face model cache
-- Postgres-backed deployment jobs
-- Idempotency keys for retried control-plane operations
-
-MiniTen does not run model inference inside Flask. Flask manages metadata, authentication, project access, Kubernetes orchestration, and inference routing. vLLM workers perform the actual inference.
-
----
-
-## Tech Stack
-
-### Backend
-
-- Python
-- Flask
-- psycopg 3
-- Raw SQL migrations
-- Raw SQL query files
-- Kubernetes Python client
-
-### Database
-
-- Postgres
-- Explicit SQL schema files
-- `deployment_jobs` table for asynchronous lifecycle work
-- `idempotency_keys` table for retry-safe control-plane operations
-
-### Frontend / Dashboard
-
-- HTML
-- CSS
-- JavaScript
-- Flask templates
-- Static files served by Flask
-
-### Model Serving
-
-- vLLM
-- Hugging Face model IDs
-- Kubernetes-managed vLLM worker pods
-- PVC-mounted Hugging Face cache
-
-### Local Infrastructure
-
-- Docker
-- Docker Compose for Postgres
-- kind or minikube for local Kubernetes
-
-### Future Cloud Target
-
-- Oracle Cloud Infrastructure
-- Oracle Kubernetes Engine
-- OCI Load Balancer
-- OCI Container Registry, optional
-
----
-
-## API Overview
-
-All public API endpoints are versioned under:
-
-```text
-/v1
+```bash
+make setup-web
 ```
 
-MiniTen has these API groups:
+`make setup-web` does the full local setup:
 
-| API Group | Purpose |
+- Installs Python dependencies with Poetry.
+- Starts Postgres with Docker Compose.
+- Runs database migrations.
+- Creates or reuses a local kind cluster named `miniten`.
+- Starts the deployment worker with real Kubernetes access.
+- Starts the Flask API/dashboard in the background.
+- Opens the dashboard in your browser.
+
+The dashboard runs at:
+
+```text
+http://127.0.0.1:8000
+```
+
+To reopen or restart the dashboard after setup:
+
+```bash
+make open-dashboard
+```
+
+To stop the background API/dashboard and remove local Compose state:
+
+```bash
+make clean-env
+```
+
+`make clean-env` does not delete the kind cluster. That preserves cached pod
+images such as vLLM. Use `make clean-kind` or `make clean-all` when you want to
+delete the cluster too.
+
+## Manual Local Workflow
+
+Use this when you want the API server in the foreground:
+
+```bash
+make setup-env
+make start-worker-real-k8s
+make run-api
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Important: `make setup-env` refuses to run while port `8000` is already
+listening. Stop the API first, or run `make clean-env`.
+
+## Make Commands
+
+Common commands:
+
+```bash
+make install
+make setup-env
+make setup-web
+make open-dashboard
+make clean-env
+make clean-kind
+make clean-all
+make migrate
+make run-api
+make run-worker
+make run-worker-dry-run
+make start-worker-real-k8s
+make test-local-apis
+make test-local-k8s
+make test-local-vllm
+make test-local-vllm-gpu
+make tests
+make coverage
+make lint
+make compile
+make clean
+```
+
+What the important targets do:
+
+| Target | Purpose |
 |---|---|
-| Users API | Create, read, and delete user accounts |
-| Auth API | Login/logout and token creation |
-| Projects API | Create, list, inspect, and delete projects |
-| Project Members API | Manage users inside a project |
-| Project API Keys API | Create/revoke project-scoped inference API keys |
-| Model Deployment API | Deploy, inspect, update, start, stop, delete, and log models |
-| Analytics API | View usage metrics, request history, and lifecycle events |
-| Inference API | Call deployed models through OpenAI-compatible endpoints |
+| `make install` | Installs Poetry and project dependencies. |
+| `make setup-env` | Starts Postgres, runs migrations, creates kind, starts dry-run worker. |
+| `make setup-web` | Runs setup, switches worker to real Kubernetes, starts dashboard/API, opens browser. |
+| `make open-dashboard` | Starts or reopens the local dashboard/API. |
+| `make start-worker-real-k8s` | Restarts the worker with `WORKER_DRY_RUN=false`. |
+| `make run-api` | Runs Flask API/dashboard in the foreground. |
+| `make run-worker` | Runs the deployment worker in the foreground using real Kubernetes. |
+| `make run-worker-dry-run` | Runs the worker without mutating Kubernetes. |
+| `make clean-env` | Stops local API, removes Compose services/volumes, clears setup marker. |
+| `make clean-kind` | Deletes the local kind cluster. |
+| `make clean-all` | Runs `clean-env` and `clean-kind`. |
+| `make test-local-apis` | Runs API smoke tests against a running local API. |
+| `make test-local-k8s` | Tests real Kubernetes resource creation/deletion with a lightweight smoke worker. |
+| `make test-local-vllm` | Deploys a real CPU vLLM pod and calls chat completions. |
+| `make test-local-vllm-gpu` | Runs the GPU vLLM smoke path when Kubernetes exposes `nvidia.com/gpu`. |
+| `make tests` | Runs the Python test suite. |
+| `make lint` | Runs Ruff. |
 
----
+## Web Dashboard Workflow
 
-## Authentication Model
+After `make setup-web`, use the browser to:
 
-MiniTen uses two authentication modes.
+1. Register an account.
+2. Log in.
+3. Create a project.
+4. Create a project API key.
+5. Deploy a model.
+6. Watch the model page for status, jobs, logs, and analytics.
+7. Send an inference request from the Inference page.
 
-### User Auth Token
+For a low-memory local CPU deployment, use:
 
-Used for dashboard and control-plane operations.
+| Field | Value |
+|---|---|
+| Model name | `small-llm` |
+| Hugging Face model ID | `HuggingFaceTB/SmolLM2-135M-Instruct` |
+| Replicas | `1` |
+| CPU request | `1` |
+| CPU limit | `4` |
+| Memory request | `1Gi` |
+| Memory limit | `6Gi` |
+| GPU count | `0` |
+| Dtype | `auto` |
+| Max model length | `256` |
+| Autoscaling | `false` |
 
-```http
-Authorization: Bearer <user_access_token>
-```
-
-Used for:
-
-```text
-create project
-manage members
-create API key
-deploy model
-start/stop model
-view analytics
-```
-
-### Project API Key
-
-Used by external applications for inference.
-
-```http
-Authorization: Bearer <project_api_key>
-```
-
-Used for:
-
-```text
-POST /v1/chat/completions
-GET /v1/models
-```
-
-The project API key determines the project. The `model` field in the request body determines which named deployment inside that project receives the request.
-
----
-
-## Deployment Identity
-
-All model operations use the project-local deployment name.
-
-Example deployment name:
-
-```text
-qwen-small-prod
-```
-
-The Hugging Face model ID is stored separately as metadata:
-
-```text
-Qwen/Qwen2.5-0.5B-Instruct
-```
-
-The OpenAI-compatible request uses the MiniTen deployment name:
-
-```json
-{
-  "model": "qwen-small-prod",
-  "messages": []
-}
-```
-
-This means the same Hugging Face model can be deployed multiple times in the same project under different names:
-
-```text
-qwen-small-dev
-qwen-small-prod
-qwen-small-gpu
-```
-
-Deployment names must be unique within a project.
-
-Recommended model name format:
-
-```text
-lowercase letters
-numbers
-hyphens
-must start and end with an alphanumeric character
-```
-
----
+The first vLLM startup can take a while because the model image and model files
+may need to download.
 
 ## CLI
 
-The `miniten` CLI uses the same HTTP API as the dashboard and external clients.
-Control-plane commands use a user login token. Inference commands use a
-project API key.
+The `miniten` CLI uses the same HTTP API as the dashboard. Control-plane
+commands use your user login token. Inference commands use a project API key.
 
-Top-level help:
+Configure the local API URL:
+
+```bash
+python -m poetry run miniten config set-url http://127.0.0.1:8000
+python -m poetry run miniten config show
+```
+
+Top-level help now includes command inputs:
+
+```bash
+python -m poetry run miniten -h
+```
+
+Current top-level help:
 
 ```text
 usage: miniten [-h]
@@ -299,46 +276,27 @@ command reference:
 Run `miniten <group> <command> -h` for detailed help on one command.
 ```
 
-Configure the CLI to talk to the local API:
+### CLI Example: Full Local Flow
+
+Register and log in:
 
 ```bash
-poetry run miniten config set-url http://127.0.0.1:8000
-poetry run miniten config show
+python -m poetry run miniten auth register --email user@example.com
+python -m poetry run miniten auth login --email user@example.com
 ```
 
-Account commands:
+Create and inspect a project:
 
 ```bash
-poetry run miniten auth register --email user@example.com
-poetry run miniten auth login --email user@example.com
-poetry run miniten auth me
-poetry run miniten auth logout
-poetry run miniten auth delete-user
+python -m poetry run miniten projects create "Personal Models"
+python -m poetry run miniten projects list
 ```
 
-Project commands:
+Deploy a small CPU model:
 
 ```bash
-poetry run miniten projects create "Personal Models"
-poetry run miniten projects list
-poetry run miniten projects get <project-id>
-poetry run miniten projects delete <project-id>
-```
-
-Project member commands:
-
-```bash
-poetry run miniten members list <project-id>
-poetry run miniten members add <project-id> --email user@example.com --role member
-poetry run miniten members update <project-id> <user-id> --role viewer
-poetry run miniten members remove <project-id> <user-id>
-```
-
-Deploy and manage a model:
-
-```bash
-poetry run miniten models deploy <project-id> \
-  --name qwen-small-prod \
+python -m poetry run miniten models deploy <project-id> \
+  --name small-llm \
   --model-id HuggingFaceTB/SmolLM2-135M-Instruct \
   --replicas 1 \
   --cpu-request 1 \
@@ -349,846 +307,320 @@ poetry run miniten models deploy <project-id> \
   --dtype auto \
   --max-model-len 256 \
   --autoscaling-enabled false
-
-poetry run miniten models list <project-id>
-poetry run miniten models get <project-id> <model-deployment-id>
-poetry run miniten models update <project-id> <model-deployment-id> --max-model-len 512
-poetry run miniten models start <project-id> <model-deployment-id>
-poetry run miniten models stop <project-id> <model-deployment-id>
-poetry run miniten models sync <project-id> <model-deployment-id>
-poetry run miniten models scale <project-id> <model-deployment-id> 1
-poetry run miniten models delete <project-id> <model-deployment-id>
-poetry run miniten models jobs <project-id> <model-deployment-id>
-poetry run miniten models status <project-id> <model-deployment-id>
-poetry run miniten models logs <project-id> qwen-small-prod --tail 50
 ```
 
-Create and use a project API key for inference:
+Check model state:
 
 ```bash
-poetry run miniten api-keys create <project-id> local-dev --use
-poetry run miniten api-keys list <project-id>
-poetry run miniten api-keys use <project-api-key>
-poetry run miniten api-keys revoke <project-id> <api-key-id>
+python -m poetry run miniten models list <project-id>
+python -m poetry run miniten models jobs <project-id> <model-deployment-id>
+python -m poetry run miniten models status <project-id> <model-deployment-id>
+python -m poetry run miniten models logs <project-id> small-llm --tail 100
 ```
 
-Send inference requests through the CLI:
+Create and save a project API key:
 
 ```bash
-poetry run miniten inference chat \
-  --model qwen-small-prod \
-  --prompt "Explain Kubernetes in one sentence." \
-  --max-tokens 64 \
+python -m poetry run miniten api-keys create <project-id> local-dev --use
+python -m poetry run miniten api-keys list <project-id>
+```
+
+Send inference:
+
+```bash
+python -m poetry run miniten inference chat \
+  --model small-llm \
+  --prompt "Say hello in one short sentence." \
+  --max-tokens 32 \
   --temperature 0
-
-poetry run miniten inference models
 ```
 
-Analytics commands:
+Lifecycle commands:
 
 ```bash
-poetry run miniten analytics overview <project-id>
-poetry run miniten analytics metrics <project-id> qwen-small-prod
-poetry run miniten analytics requests <project-id> qwen-small-prod --limit 20
-poetry run miniten analytics events <project-id> qwen-small-prod
+python -m poetry run miniten models stop <project-id> <model-deployment-id>
+python -m poetry run miniten models start <project-id> <model-deployment-id>
+python -m poetry run miniten models sync <project-id> <model-deployment-id>
+python -m poetry run miniten models scale <project-id> <model-deployment-id> 1
+python -m poetry run miniten models delete <project-id> <model-deployment-id>
 ```
 
-The CLI stores local state in `~/.miniten/config.json` by default. Override the
-API URL, user token, project API key, or config path with `MINITEN_API_URL`,
-`MINITEN_ACCESS_TOKEN`, `MINITEN_PROJECT_API_KEY`, and `MINITEN_CLI_CONFIG`.
+Analytics:
 
-## Core API Examples
-
-### Create User
-
-```http
-POST /v1/users
+```bash
+python -m poetry run miniten analytics overview <project-id>
+python -m poetry run miniten analytics metrics <project-id> small-llm
+python -m poetry run miniten analytics requests <project-id> small-llm --limit 20
+python -m poetry run miniten analytics events <project-id> small-llm
 ```
 
-```json
-{
-  "email": "user@example.com",
-  "password": "password123"
-}
+The CLI stores local state in `~/.miniten/config.json` by default. Override
+settings with:
+
+```text
+MINITEN_API_URL
+MINITEN_ACCESS_TOKEN
+MINITEN_PROJECT_API_KEY
+MINITEN_CLI_CONFIG
 ```
 
-### Login
+## HTTP API
 
-```http
-POST /v1/auth/login
-```
+All JSON API routes are under `/v1`.
 
-```json
-{
-  "email": "user@example.com",
-  "password": "password123"
-}
-```
+Main route groups:
 
-### Create Project
+| API Group | Purpose |
+|---|---|
+| Users | Account creation, lookup, deletion. |
+| Auth | Login/logout and user token creation. |
+| Projects | Project creation, listing, lookup, deletion. |
+| Members | Project membership management. |
+| API Keys | Project-scoped inference key creation/listing/revocation. |
+| Models | Model deploy/update/start/stop/scale/delete/status/logs. |
+| Analytics | Project/model metrics, requests, and lifecycle events. |
+| Inference | OpenAI-compatible model calls. |
 
-```http
-POST /v1/projects
-Authorization: Bearer <user_access_token>
-```
-
-```json
-{
-  "name": "Personal Models"
-}
-```
-
-### Deploy Model
-
-```http
-POST /v1/projects/{projectID}/models
-Authorization: Bearer <user_access_token>
-```
-
-```json
-{
-  "name": "qwen-small-prod",
-  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
-  "resources": {
-    "cpu_request": "2",
-    "cpu_limit": "4",
-    "memory_request": "8Gi",
-    "memory_limit": "16Gi",
-    "gpu_count": 0
-  },
-  "vllm": {
-    "dtype": "auto",
-    "max_model_len": 4096
-  },
-  "autoscaling": {
-    "enabled": true,
-    "min_replicas": 1,
-    "max_replicas": 3,
-    "target_cpu_utilization": 70
-  }
-}
-```
-
-### Call Model
+Example inference request:
 
 ```http
 POST /v1/chat/completions
-Authorization: Bearer <project_api_key>
+Authorization: Bearer <project-api-key>
+Content-Type: application/json
 ```
 
 ```json
 {
-  "model": "qwen-small-prod",
+  "model": "small-llm",
   "messages": [
     {
       "role": "user",
-      "content": "Explain Kubernetes in one sentence."
+      "content": "Say hello in one short sentence."
     }
   ],
-  "max_tokens": 128
+  "max_tokens": 32,
+  "temperature": 0
 }
 ```
 
-The MVP proxies non-streaming chat completions first. Requests with
-`"stream": true` return a `streaming_not_supported` error until streaming is
-implemented.
+MiniTen currently proxies non-streaming chat completions. Requests with
+`"stream": true` return `streaming_not_supported`.
 
----
+## Kubernetes Model
 
-## System Architecture
+MiniTen uses one local Kubernetes cluster as shared infrastructure. The cluster
+is not model-specific.
 
-```text
-External User / Developer App
-        |
-        v
-OCI Load Balancer, or localhost during local development
-        |
-        v
-Flask API / Dashboard
-        |
-        +--> Auth routes
-        +--> User routes
-        +--> Project routes
-        +--> Project member routes
-        +--> API key routes
-        +--> Model deployment routes
-        +--> Analytics routes
-        +--> Inference routes
-        |
-        +--> Postgres
-        |
-        +--> Kubernetes API
-                  |
-                  v
-          OKE / kind / minikube cluster
-                  |
-                  +--> Namespace per project
-                  +--> Deployment per model version
-                  +--> Service per named model deployment
-                  +--> PVC per model deployment cache
-                  +--> HPA per autoscaled deployment
-                  +--> Secret per deployment, optional
-                  +--> vLLM worker pods
-```
-
-MiniTen has two conceptual planes:
+For each project, MiniTen creates a namespace:
 
 ```text
-Control plane = user/project/deployment management
-Data plane    = inference routing to vLLM workers
+Namespace/miniten-<project-slug>
 ```
 
----
-
-## Control Plane
-
-The control plane manages platform metadata and Kubernetes lifecycle operations.
-
-Examples:
+For each model deployment, MiniTen creates:
 
 ```text
-sign up
-log in
-create project
-create API key
-deploy model
-start model
-stop model
-scale model
-delete model
-view analytics
+Deployment/<model-name>-v1
+Service/<model-name>
+PVC/<model-name>-hf-cache
+HPA/<model-name>-v1, when autoscaling is enabled
+Secret/<model-name>-secrets, when credentials are configured
 ```
 
-Control-plane state is stored in Postgres.
+Deleting a model deployment removes the model runtime resources such as HPA,
+Service, Deployment, and Secret. The model cache PVC is retained by default so
+model files do not need to be downloaded again after retries or redeploys.
 
-Slow lifecycle work is stored in the `deployment_jobs` table and processed by a background Deployment Worker/Reconciler.
+Deleting a project removes the project namespace and the Kubernetes resources
+inside it.
 
----
+Deleting the whole local cluster is a development-environment operation:
 
-## Data Plane
+```bash
+make clean-kind
+```
 
-The data plane handles inference traffic.
+## Local Smoke Tests
 
-Inference requests are synchronous and are not placed in the deployment job queue.
+API smoke test:
+
+```bash
+make setup-env
+make run-api
+make test-local-apis
+```
+
+Real Kubernetes smoke test:
+
+```bash
+make setup-env
+make run-api
+make test-local-k8s
+```
+
+CPU vLLM smoke test:
+
+```bash
+make setup-env
+make run-api
+make test-local-vllm
+```
+
+GPU vLLM smoke test:
+
+```bash
+make setup-env
+make run-api
+make test-local-vllm-gpu
+```
+
+The GPU smoke path requires Kubernetes to advertise allocatable
+`nvidia.com/gpu`. Docker Desktop GPU support alone is not enough for kind pods,
+because kind runs pod containers through containerd inside the kind node.
+
+## Useful Kubernetes Debug Commands
+
+List namespaces:
+
+```bash
+kubectl get ns
+```
+
+List project resources:
+
+```bash
+kubectl get all,pvc,hpa,secret -n <project-namespace>
+```
+
+Watch model pods:
+
+```bash
+kubectl get pods -n <project-namespace> -w
+```
+
+View recent events:
+
+```bash
+kubectl get events -A --sort-by=.lastTimestamp
+```
+
+View model logs:
+
+```bash
+kubectl logs -n <project-namespace> deploy/<model-name>-v1 --tail=200
+```
+
+Port-forward a model service manually:
+
+```bash
+kubectl port-forward -n <project-namespace> svc/<model-name> 18080:8000
+```
+
+## Troubleshooting
+
+### `make setup-env` says port 8000 is already accepting connections
+
+The API/dashboard is already running. Stop it:
+
+```bash
+make clean-env
+```
+
+Or manually stop the process using port `8000`.
+
+### Inference says the model deployment is not running
+
+Check the model page in the dashboard or run:
+
+```bash
+python -m poetry run miniten models status <project-id> <model-deployment-id>
+python -m poetry run miniten models jobs <project-id> <model-deployment-id>
+python -m poetry run miniten models logs <project-id> <model-name> --tail 100
+```
+
+If the model is still starting, wait for vLLM to download/load the model.
+
+### vLLM fails with a max model length error
+
+Use a smaller max model length. For local CPU testing, start with:
 
 ```text
-External app
-  ↓
-POST /v1/chat/completions
-  ↓
-Flask inference route
-  ↓
-Validate project API key
-  ↓
-Resolve API key to project
-  ↓
-Read request.body.model as deployment name
-  ↓
-Find model_deployments row by project_id + name
-  ↓
-Check model is running
-  ↓
-Forward request to Kubernetes Service
-  ↓
-vLLM worker returns response
-  ↓
-Write inference_requests metadata
+256
 ```
 
-Inference does not go to Hugging Face and does not read the PVC directly. vLLM has already loaded the model into memory.
+### vLLM fails because there is no chat template
 
----
-
-## Kubernetes Resource Model
-
-For each project:
+Use an instruct/chat model for `/v1/chat/completions`, such as:
 
 ```text
-Project: personal
-Namespace: miniten-personal
+HuggingFaceTB/SmolLM2-135M-Instruct
 ```
 
-For each model deployment:
+Base/non-chat models may not support chat completions without a tokenizer chat
+template.
+
+### CPU vLLM fails with memory reservation errors
+
+Use lower local settings:
 
 ```text
-Deployment name: qwen-small-prod
-Model ID: Qwen/Qwen2.5-0.5B-Instruct
-Version: v1
+memory limit: 6Gi
+max model length: 256
+autoscaling: false
 ```
 
-For the MVP, `v1` is a fixed internal Kubernetes resource suffix for the deployment generation. It is not a user-facing versioning, rollback, or promotion system.
+The project also defaults `VLLM_CPU_MEMORY_UTILIZATION` low for local CPU use.
 
-MiniTen creates:
+### GPU works in Docker but not in kind
+
+That is expected on Docker Desktop. Docker can expose the GPU to a direct
+container, but kind pods run inside the kind node container through containerd.
+The NVIDIA runtime injection does not automatically propagate into that nested
+runtime.
+
+Use CPU vLLM locally, or use a Linux/WSL Kubernetes setup with NVIDIA container
+runtime and the NVIDIA device plugin configured.
+
+## Configuration
+
+Common environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres connection URL. |
+| `SECRET_KEY` | Flask/session/JWT signing secret. |
+| `API_KEY_HASH_SECRET` | HMAC secret for project API keys. |
+| `KUBECONFIG_DIR` | Directory used by local worker kubeconfig. |
+| `WORKER_DRY_RUN` | When `true`, worker marks jobs without changing Kubernetes. |
+| `HUGGING_FACE_TOKEN` | Optional token for private/gated Hugging Face models. |
+| `VLLM_CPU_MEMORY_UTILIZATION` | CPU KV-cache reservation tuning for vLLM. |
+| `LOG_LEVEL` | Logging level, defaults to `INFO`. |
+
+See `.env.example` for the local defaults used by the Makefile and Docker
+Compose.
+
+## Repository Layout
 
 ```text
-Deployment/qwen-small-prod-v1
-Service/qwen-small-prod
-PVC/qwen-small-prod-hf-cache
-HPA/qwen-small-prod-v1, optional
-Secret/qwen-small-prod-secrets, optional
+app/
+  routes/       Flask API and dashboard routes
+  services/     Business logic and deployment worker
+  db/           SQL loader, pool, migrations
+  k8s/          Kubernetes manifests and client helpers
+  security/     Passwords, tokens, API key hashing
+  templates/    Dashboard templates
+  static/       Dashboard CSS/JS
+
+migrations/     Raw SQL migrations
+scripts/        Local setup, dashboard, smoke tests
+tests/          Unit and smoke-style tests
+docs/           Diagrams and design notes
 ```
 
-The Deployment runs vLLM.
+## Notes On Data
 
-The Service gives the model a stable internal endpoint.
-
-The PVC caches Hugging Face model files.
-
-The HPA controls autoscaling when enabled.
-
-The Secret can provide private model credentials such as a Hugging Face token.
-
----
-
-## Model Weight Caching
-
-For the MVP, MiniTen uses a PVC-backed Hugging Face cache.
-
-Each vLLM worker mounts a Kubernetes PVC at:
-
-```text
-/root/.cache/huggingface
-```
-
-First startup / cache miss:
-
-```text
-vLLM worker pod starts
-  ↓
-PVC is mounted at /root/.cache/huggingface
-  ↓
-vLLM asks Hugging Face libraries for model files
-  ↓
-Local cache is empty
-  ↓
-vLLM downloads model files from Hugging Face
-  ↓
-Downloaded files are written directly into the PVC-mounted cache path
-  ↓
-vLLM loads model weights into CPU/GPU memory
-  ↓
-Readiness probe passes
-```
-
-Restart / cache hit:
-
-```text
-vLLM worker pod restarts
-  ↓
-Same PVC is mounted
-  ↓
-Model files are present
-  ↓
-vLLM loads model from PVC into memory
-  ↓
-Pod becomes ready
-```
-
-Hugging Face is only used on startup/cache miss. It is not used during normal inference.
-
----
-
-## Autoscaling
-
-MiniTen supports Kubernetes HPA-based autoscaling in the MVP design.
-
-Example autoscaling config:
-
-```json
-{
-  "enabled": true,
-  "min_replicas": 1,
-  "max_replicas": 3,
-  "target_cpu_utilization": 70
-}
-```
-
-Autoscaling flow:
-
-```text
-Traffic increases
-  ↓
-CPU utilization rises
-  ↓
-HPA observes metrics
-  ↓
-HPA increases replica count
-  ↓
-Deployment creates more vLLM pods
-  ↓
-New pods mount PVC cache
-  ↓
-Pods load model
-  ↓
-Kubernetes Service load-balances traffic across ready pods
-```
-
-Autoscaling is supported in the MVP.
-
-MiniTen uses a shared PVC-backed Hugging Face cache by default. When autoscaling creates more than one replica for a deployment, the configured storage class must support mounting that cache across replicas with a compatible access mode such as `ReadWriteMany`.
-
-If the local or cloud cluster does not support a compatible shared volume mode, the deployment may still run with one replica, but multi-replica autoscaling with a shared cache is not guaranteed.
-
----
-
-## Database
-
-Postgres stores application metadata.
-
-Core tables:
-
-```text
-users
-projects
-project_members
-model_deployments
-api_keys
-inference_requests
-model_events
-idempotency_keys
-deployment_jobs
-```
-
-Postgres does not store model weights, prompts, or model responses.
+Postgres stores metadata, jobs, API key hashes, lifecycle events, and inference
+request metadata. It does not store raw API keys, passwords, prompts, model
+responses, or model weights.
 
 Model weights live on Hugging Face and are cached in Kubernetes PVCs.
-
-Kubernetes remains the source of truth for live pod and replica state.
-
----
-
-## Deployment Jobs
-
-`deployment_jobs` stores asynchronous model lifecycle work and the durable history of deployment commands that were requested, attempted, retried, completed, or failed.
-
-MVP deployment assumption: run exactly one Deployment Worker process/pod. The
-queue format already preserves command history and stale-job skipping, but
-horizontal worker scaling should wait until per-model serialization and worker
-heartbeat/lease renewal are implemented.
-
-Job types:
-
-```text
-deploy_model
-start_model
-stop_model
-scale_model
-delete_model
-sync_status
-```
-
-Flow:
-
-```text
-User requests deploy/start/stop/scale/delete
-  ↓
-Flask route validates auth and project permissions
-  ↓
-Model deployment metadata is written to Postgres
-  ↓
-deployment_jobs row is created
-  ↓
-Deployment Worker claims the job
-  ↓
-Deployment Worker calls Kubernetes API
-  ↓
-Deployment Worker updates model status
-  ↓
-Deployment Worker writes model_events
-  ↓
-Job is marked succeeded, retrying, or failed
-```
-
-The job queue is for control-plane operations only.
-
-Normal chat/inference requests do not use this queue.
-
-Each model control-plane command increments `model_deployments.desired_generation`
-and stores that generation on the queued job. Older jobs remain in history but
-are marked `skipped` if a newer desired state has already superseded them.
-
----
-
-## Idempotency
-
-`idempotency_keys` prevents duplicate side effects from retried control-plane requests.
-
-Used for operations such as:
-
-```text
-deploy model
-start model
-stop model
-scale model
-delete model
-```
-
-Example:
-
-```http
-POST /v1/projects/{projectID}/models
-Idempotency-Key: deploy-qwen-small-prod-001
-```
-
-Retry behavior:
-
-```text
-same key + same request body    → return original response
-same key + different body       → return 409 Conflict
-```
-
-Model deploy/start/stop/scale/delete routes require `Idempotency-Key`.
-
-Idempotency is not used for normal inference requests in the MVP.
-
----
-
-## Analytics
-
-MiniTen stores lightweight inference request metadata.
-
-The `inference_requests` table can support:
-
-```text
-request count
-error count
-average latency
-recent request history
-last request time
-```
-
-The MVP should not store prompts or model responses.
-
-Lifecycle events are stored in `model_events`.
-
----
-
-## Local Development
-
-The system is designed to work locally before moving to OCI.
-
-Local equivalents:
-
-```text
-OKE / Kubernetes       → kind or minikube
-OCI Load Balancer      → localhost / port-forward
-Postgres               → Docker Compose Postgres
-vLLM workers           → Kubernetes pods in kind/minikube
-PVC model cache        → local Kubernetes PVC
-Hugging Face Hub       → public Hugging Face Hub
-```
-
-Example local workflow:
-
-```bash
-make setup-env
-make run-api
-make test-local-apis
-```
-
-### Running the Web Dashboard
-
-Use `setup-web` when you want MiniTen to prepare the local environment, start
-the real Kubernetes worker, start the Flask API/dashboard server, and open the
-website automatically:
-
-```bash
-make setup-web
-```
-
-The dashboard runs at:
-
-```text
-http://127.0.0.1:8000
-```
-
-Use `open-dashboard` after setup when you only need to start or reopen the
-dashboard:
-
-```bash
-make open-dashboard
-```
-
-Use the manual flow when you want the API process in the foreground:
-
-```bash
-make setup-env
-make start-worker-real-k8s
-make run-api
-```
-
-Then open `http://127.0.0.1:8000` in your browser. `make setup-env` refuses to
-run while port `8000` is already listening because setup may restart Postgres;
-stop the API first or run `make clean-env`.
-
-To stop the background dashboard/API process and local Compose services:
-
-```bash
-make clean-env
-```
-
-Common development commands:
-
-```bash
-make install
-make setup-env
-make setup-web
-make open-dashboard
-make clean-env
-make clean-kind
-make clean-all
-make migrate
-make run-api
-make run-worker
-make run-worker-dry-run
-make start-worker-real-k8s
-make test-local-apis
-make test-local-k8s
-make test-local-vllm
-make test-local-vllm-gpu
-make lint
-make tests
-make compile
-make clean
-```
-
-`make setup-env` installs Python dependencies, starts local Postgres through
-Docker Compose, waits for it to accept connections, applies migrations,
-creates or reuses a local `kind` cluster named `miniten`, writes a Docker
-Compose kubeconfig to `.local/kube/config`, and starts the local Deployment
-Worker in dry-run mode.
-`make setup-web` runs `setup-env`, switches the deployment worker to real
-Kubernetes mode with `WORKER_DRY_RUN=false`, starts the local Flask
-API/dashboard in the background, waits for `http://127.0.0.1:8000`, and opens
-the website in your default browser. Use `make open-dashboard` after setup when
-you only need to start or reopen the dashboard.
-`make clean-env` stops Compose services, removes the local Postgres volume,
-and removes the local setup marker while preserving the `kind` cluster and its
-cached pod images. Use `make clean-kind` only when you intentionally want to
-delete the local `kind` cluster. Use `make clean-all` for a full reset of both
-Compose state and the `kind` cluster.
-`make test-local-apis` runs HTTP smoke tests against a running local API, so
-start `make run-api` in another terminal first. The smoke test waits for
-`GET /readyz` before exercising authenticated endpoints, then verifies queued
-deployment jobs are consumed and marked `succeeded`. If `setup-env` restarts
-Postgres while the API is already running, restart `make run-api` so the Flask
-process opens fresh database connections.
-
-The Makefile enforces the expected order for local development:
-
-```bash
-make setup-env
-make run-api
-```
-
-`make setup-env` fails if the local API port is already running, because setup
-may restart Postgres. `make run-api` fails until `setup-env` has completed and
-written the local setup marker. `make clean-env` removes that marker.
-
-`make run-api` starts Flask's development server through `app/main.py`, which
-works on Windows/Git Bash. Gunicorn depends on Unix-only modules such as
-`fcntl`, so `make run-api-gunicorn` is for Linux/WSL-style environments only.
-The Docker image uses the Gunicorn path by default, while the Compose `worker`
-service overrides the command to run `python -m app.services.deployment_worker`.
-`make setup-env` always starts that worker for local development with
-`WORKER_DRY_RUN=true`, so local deployment commands are processed without
-mutating a Kubernetes cluster. `make run-worker` uses the real Kubernetes
-client, and `make run-worker-dry-run` runs a foreground dry-run worker when you
-want to inspect worker logs directly.
-
-The setup script requires Docker, `kind`, and `kubectl` on PATH. On Windows,
-install the Kubernetes tools with:
-
-```powershell
-winget install --id Kubernetes.kind --exact
-winget install --id Kubernetes.kubectl --exact
-```
-
-For a Docker Compose worker that mutates the real local `kind` cluster, run
-`make start-worker-real-k8s`. That command refreshes `.local/kube/config` and
-restarts the worker with `WORKER_DRY_RUN=false`. The worker container uses host
-networking so kind's localhost API endpoint still matches its TLS certificate.
-
-Real local Kubernetes smoke workflow:
-
-```bash
-make setup-env
-make run-api
-make test-local-k8s
-```
-
-`make test-local-k8s` automatically switches the worker into real Kubernetes
-mode, deploys a lightweight OpenAI-compatible smoke-test container, waits for
-the worker to verify Kubernetes readiness, checks
-Namespace/PVC/Deployment/Service/HPA creation, calls the model logs endpoint,
-creates a project API key, calls `/v1/chat/completions` through `kubectl
-port-forward`, verifies analytics/request history includes the inference call,
-deletes the model, and verifies runtime resources are removed. If
-`HUGGING_FACE_TOKEN` is set, the worker also creates and deletes the per-model
-Secret. This test intentionally avoids pulling the full `vllm/vllm-openai`
-image.
-
-Real local vLLM smoke workflow:
-
-```bash
-make setup-env
-make run-api
-make test-local-vllm
-```
-
-`make test-local-vllm` deploys an actual vLLM container, waits for it to load a
-small Hugging Face model, calls `/v1/chat/completions`, verifies analytics
-metadata, then deletes the deployment. This test is intentionally separate from
-`make test-local-k8s` because it can take much longer and may fail for local
-machine reasons such as image pull issues, CPU-only vLLM support, model
-download/authentication problems, memory pressure, or readiness timeouts. Tune
-the model and resources with `MINITEN_VLLM_TEST_MODEL_ID` and the
-`MINITEN_VLLM_TEST_*` settings in `.env.example`. MiniTen owns vLLM image
-selection, so clients do not submit custom images. The local vLLM smoke command
-defaults to `vllm/vllm-openai-cpu:latest-x86_64` and
-`MINITEN_VLLM_TEST_DEVICE=cpu` so Docker Desktop/kind can run without GPUs. It
-uses a small instruct model by default because `/v1/chat/completions` requires a
-tokenizer with a chat template. GPU
-testing should use the normal `vllm/vllm-openai` image, set
-`MINITEN_VLLM_TEST_DEVICE=cuda`, and request GPUs only after the local cluster
-exposes an NVIDIA device plugin. MiniTen passes that device value as
-`VLLM_TARGET_DEVICE`, because vLLM reads the environment variable while
-constructing CLI defaults and the CPU image does not accept a `--device` CLI flag.
-CPU deployments also pass MiniTen's internal `VLLM_CPU_MEMORY_UTILIZATION`
-setting to keep vLLM's CPU KV-cache reservation below Docker Desktop/kind node
-memory. The local vLLM smoke test also uses a short context length and a larger
-memory limit than the fast smoke test because CPU vLLM has meaningful startup
-overhead. Model pods use
-`imagePullPolicy: IfNotPresent`; kind stores those pod images inside the kind
-node container's containerd image store, so they may not appear as ordinary host
-Docker images in Docker Desktop. `make clean-env` intentionally keeps that kind
-node image cache so large images such as vLLM are not redownloaded during normal
-local resets. `make clean-kind` and `make clean-all` delete that cache.
-
-GPU vLLM smoke workflow:
-
-```bash
-make setup-env
-make run-api
-make test-local-vllm-gpu
-```
-
-`make test-local-vllm-gpu` is the same real vLLM inference smoke test, but it
-requests one `nvidia.com/gpu`, uses `VLLM_TARGET_DEVICE=cuda`, and expects the
-managed GPU image `vllm/vllm-openai:latest`. The target verifies Docker can see
-a vLLM-compatible GPU, then verifies the active Kubernetes context advertises
-allocatable `nvidia.com/gpu`.
-
-Docker Desktop kind is intentionally rejected for this GPU path. Docker Desktop
-can run GPU containers with `docker run --gpus all`, but kind launches pods
-through containerd inside the kind node container; Docker Desktop's NVIDIA
-runtime injection does not propagate into that nested runtime, so vLLM pods
-schedule but fail CUDA/NVML initialization. Use a Linux/WSL Kubernetes cluster
-configured with NVIDIA container runtime/device plugin support for GPU smoke
-tests. Tune the GPU test with `MINITEN_GPU_PROBE_IMAGE`,
-`MINITEN_VLLM_GPU_TEST_MODEL_ID`, `MINITEN_VLLM_GPU_TEST_GPU_COUNT`, and
-`MINITEN_VLLM_GPU_TEST_DEVICE`.
-
-The GPU target also checks the Docker-visible GPU compute capability before
-deploying. Current prebuilt vLLM GPU images require modern NVIDIA GPUs, so older
-cards fail early instead of creating a Kubernetes pod that crashes during
-CUDA/NVML initialization. Use `make test-local-vllm` for the CPU vLLM path on
-unsupported local GPU backends.
-
-When Flask runs locally with `API_DEBUG=true`, inference routing uses
-`INFERENCE_LOCAL_PORT_FORWARD_URL` and the smoke test opens a temporary
-`kubectl port-forward` to the Kubernetes Service. In production-style API
-containers, inference uses Kubernetes Service DNS directly.
-
-Logging is controlled with `LOG_LEVEL`, defaulting to `INFO`. Use `DEBUG` when
-you need lower-level SQL/Kubernetes/auth diagnostics. Logs intentionally avoid
-raw API keys, passwords, prompts, model responses, and Hugging Face tokens.
-
----
-
-## Repository Shape
-
-Current structure:
-
-```text
-README.md
-.env.example
-docker-compose.yml
-Dockerfile
-pyproject.toml
-
-app/
-  __init__.py
-  config.py
-
-  routes/
-    auth.py
-    users.py
-    projects.py
-    project_members.py
-    api_keys.py
-    model_deployments.py
-    inference.py
-    analytics.py
-    dashboard.py
-
-  services/
-    auth_service.py
-    user_service.py
-    project_service.py
-    api_key_service.py
-    model_deployment_service.py
-    inference_service.py
-    deployment_worker.py
-    reconciler.py
-    idempotency_service.py
-
-  db/
-    pool.py
-    migrate.py
-    sql.py
-    queries/
-      users.sql
-      projects.sql
-      api_keys.sql
-      model_deployments.sql
-      deployment_jobs.sql
-      inference_requests.sql
-      model_events.sql
-      idempotency_keys.sql
-
-  k8s/
-    client.py
-    names.py
-    manifests.py
-    deployment_manager.py
-
-  security/
-    passwords.py
-    tokens.py
-    api_keys.py
-
-  utils/
-    errors.py
-    validation.py
-    time.py
-
-  templates/
-  static/
-
-migrations/
-  001_initial_schema.sql
-
-scripts/
-examples/
-docs/
-  miniten logo.png
-  MiniTen System Design.png
-  MiniTen_System_Design.md
-  MiniTen_API_Endpoint_Design.md
-  MiniTen_Database_Schema.md
-tests/
-```
-
----
-

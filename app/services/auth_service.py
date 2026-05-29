@@ -71,20 +71,30 @@ def login(email: Any, password: Any) -> dict[str, Any]:
     return {
         # Tokens are stateless JWTs. The client stores and presents this value
         # in `Authorization: Bearer ...` for control-plane requests.
-        "access_token": create_access_token(str(auth_row["user_id"])),
+        "access_token": create_access_token(
+            str(auth_row["user_id"]),
+            token_version=int(auth_row.get("token_version", 0)),
+        ),
         "token_type": "bearer",
         "user": serialize_user(user_row),
     }
 
-# TODO: Make log out invalidate the jwt and all endpoints must check if the jwt is valid.  
-def logout() -> dict[str, bool]:
-    """Return a consistent logout response for stateless bearer tokens.
-
-    The MVP does not store server-side token sessions, so logout is a client
-    action: discard the bearer token. A token denylist can be added later if
-    the product needs immediate revocation before token expiry.
-    """
-    logger.info("Logout acknowledged for stateless bearer token.")
+def logout(user_id: Any) -> dict[str, bool]:
+    """Invalidate existing user access tokens by advancing token_version."""
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("increment_user_token_version"),
+                {"user_id": user_id},
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise ApiError(
+            type="user_not_found",
+            message="User not found.",
+            status_code=404,
+        )
+    logger.info("Logout revoked access tokens user_id=%s.", user_id)
     return {"logged_out": True}
 
 

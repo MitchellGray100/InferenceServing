@@ -218,10 +218,22 @@ def test_current_user_id_returns_g_value(app) -> None:
 @pytest.mark.real_auth_user_check
 def test_require_existing_user_id_accepts_current_user(monkeypatch) -> None:
     user_id = "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"
-    fake = FakeTransaction(fetchone={"user_id": user_id})
+    fake = FakeTransaction(fetchone={"user_id": user_id, "token_version": 3})
     monkeypatch.setattr(token_service, "transaction", fake.transaction)
 
-    assert require_existing_user_id(user_id) == user_id
+    assert require_existing_user_id(user_id, 3) == user_id
+
+
+@pytest.mark.real_auth_user_check
+def test_require_existing_user_id_rejects_revoked_token_version(monkeypatch) -> None:
+    user_id = "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"
+    fake = FakeTransaction(fetchone={"user_id": user_id, "token_version": 4})
+    monkeypatch.setattr(token_service, "transaction", fake.transaction)
+
+    with pytest.raises(ApiError) as error:
+        require_existing_user_id(user_id, 3)
+
+    assert error.value.type == "unauthorized"
 
 
 @pytest.mark.real_auth_user_check
@@ -325,8 +337,13 @@ def test_derive_key_prefix_rejects_malformed_keys(raw_key) -> None:
         api_keys.derive_key_prefix(raw_key)
 
 
-def test_auth_service_logout_response() -> None:
-    assert auth_service.logout() == {"logged_out": True}
+def test_auth_service_logout_response(monkeypatch) -> None:
+    fake = FakeTransaction(fetchone={"user_id": "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"})
+    monkeypatch.setattr(auth_service, "transaction", fake.transaction)
+
+    assert auth_service.logout("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e") == {
+        "logged_out": True
+    }
 
 
 def test_invalid_credentials_error_is_generic() -> None:
@@ -506,6 +523,30 @@ def test_worker_mark_success_for_running_status(monkeypatch) -> None:
 
     assert events == ["model_running"]
     assert fake.cursor.executed[-1]["deployment_job_id"] == job_row()["deployment_job_id"]
+
+
+def test_worker_mark_success_for_hard_restart_has_distinct_event(monkeypatch) -> None:
+    fake = FakeTransaction()
+    events = []
+
+    monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        deployment_worker,
+        "update_deployment_status_with_cursor",
+        lambda cur, model_deployment_id, status: deployment_row(status=status),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "create_model_event_with_cursor",
+        lambda cur, deployment, event_type, message, metadata: events.append(event_type),
+    )
+
+    deployment_worker.mark_job_succeeded(
+        job_row("hard_restart_model"),
+        deployment_row(),
+    )
+
+    assert events == ["model_hard_restarted"]
 
 
 def test_worker_mark_success_for_delete_marks_deleted(monkeypatch) -> None:

@@ -55,6 +55,7 @@ def user_row(**overrides):
         "user_id": USER_ID,
         "email": "user@example.com",
         "hashed_password": "hashed",
+        "token_version": 0,
         "created_at": NOW,
         "last_login_at": None,
     }

@@ -36,7 +36,7 @@ SUCCESS_EVENT_TYPES = {
     "update_model": "model_updated",
     "start_model": "model_started",
     "stop_model": "model_stopped",
-    "hard_restart_model": "model_started",
+    "hard_restart_model": "model_hard_restarted",
     "scale_model": "model_scaled",
     "delete_model": "model_deleted",
     "sync_status": "model_status_synced",

@@ -116,6 +116,23 @@ def test_hard_restart_job_type_is_allowed_by_schema_and_migration() -> None:
     assert "'hard_restart_model'" in hard_restart_migration
 
 
+def test_auth_token_version_and_hard_restart_event_schema() -> None:
+    initial_schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+    migration = (
+        migrate.migrations_dir() / "005_auth_token_version_and_hard_restart_event.sql"
+    ).read_text(
+        encoding="utf-8"
+    )
+
+    assert "token_version INTEGER NOT NULL DEFAULT 0" in initial_schema
+    assert "'model_hard_restarted'" in initial_schema
+    assert "ADD COLUMN IF NOT EXISTS token_version" in migration
+    assert "DROP CONSTRAINT IF EXISTS model_events_event_type_check" in migration
+    assert "'model_hard_restarted'" in migration
+
+
 def test_get_applied_migrations_creates_table_and_returns_mapping() -> None:
     conn = FakeMigrationConnection(fetchall=[("001.sql", "abc")])
 

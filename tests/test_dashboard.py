@@ -275,7 +275,7 @@ def test_deleted_user_dashboard_session_is_cleared(monkeypatch):
     client = app.test_client()
     login(client, app)
 
-    def missing_user_from_token(user_id):
+    def missing_user_from_token(user_id, token_version=0):
         raise ApiError("unauthorized", "Missing or invalid access token.", 401)
 
     monkeypatch.setattr(

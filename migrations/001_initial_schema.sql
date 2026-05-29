@@ -11,6 +11,7 @@ CREATE TABLE users (
 
   email TEXT NOT NULL UNIQUE,
   hashed_password TEXT NOT NULL,
+  token_version INTEGER NOT NULL DEFAULT 0,
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_login_at TIMESTAMP
@@ -160,6 +161,7 @@ CREATE TABLE model_events (
     'model_running',
     'model_stopped',
     'model_started',
+    'model_hard_restarted',
     'model_updated',
     'model_scaled',
     'model_status_synced',

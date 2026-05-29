@@ -33,6 +33,7 @@ queries = load_queries()
 def create_access_token(
     user_id: str,
     *,
+    token_version: int = 0,
     expires_delta: timedelta = DEFAULT_ACCESS_TOKEN_TTL,
 ) -> str:
     """Create a signed bearer token for dashboard/control-plane requests."""
@@ -42,6 +43,7 @@ def create_access_token(
     payload = {
         "sub": user_id,
         "type": TOKEN_TYPE,
+        "token_version": int(token_version),
         "iat": now,
         "exp": now + expires_delta,
     }
@@ -70,8 +72,8 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
-def require_existing_user_id(user_id: Any) -> str:
-    """Require that a token subject still maps to a current user row."""
+def require_existing_user_id(user_id: Any, token_version: Any = 0) -> str:
+    """Require that a token subject maps to a current row and token version."""
     try:
         canonical_user_id = validate_uuid(user_id, "userID")
     except ApiError as exc:
@@ -88,6 +90,15 @@ def require_existing_user_id(user_id: Any) -> str:
 
     if row is None:
         logger.info("Rejected access token for missing user_id=%s.", canonical_user_id)
+        raise unauthorized_error()
+    try:
+        presented_version = int(token_version)
+        current_version = int(row.get("token_version", 0))
+    except (TypeError, ValueError) as exc:
+        logger.info("Rejected access token with invalid token_version.")
+        raise unauthorized_error() from exc
+    if presented_version != current_version:
+        logger.info("Rejected revoked access token user_id=%s.", canonical_user_id)
         raise unauthorized_error()
 
     return canonical_user_id
@@ -129,7 +140,10 @@ def require_user_auth(view: F) -> F:
         # needed by downstream services.
         token = get_bearer_token()
         payload = decode_access_token(token)
-        g.current_user_id = require_existing_user_id(payload["sub"])
+        g.current_user_id = require_existing_user_id(
+            payload["sub"],
+            payload.get("token_version", 0),
+        )
         logger.debug("Authenticated user request user_id=%s.", g.current_user_id)
         return view(*args, **kwargs)
 

@@ -39,11 +39,15 @@ def test_password_hash_and_verify_roundtrip() -> None:
 
 def test_access_token_roundtrip(app) -> None:
     with app.app_context():
-        token = create_access_token("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e")
+        token = create_access_token(
+            "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e",
+            token_version=2,
+        )
         payload = decode_access_token(token)
 
     assert payload["sub"] == "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"
     assert payload["type"] == "user_access"
+    assert payload["token_version"] == 2
     assert isinstance(payload["exp"], int)
 
 
@@ -138,7 +142,14 @@ def test_login_route(monkeypatch, client) -> None:
     assert response.get_json() == expected
 
 
-def test_logout_route(app, client) -> None:
+def test_logout_route(monkeypatch, app, client) -> None:
+    calls = []
+
+    def logout(user_id):
+        calls.append(user_id)
+        return {"logged_out": True}
+
+    monkeypatch.setattr("app.routes.auth.auth_service.logout", logout)
     with app.app_context():
         token = create_access_token("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e")
 
@@ -149,3 +160,4 @@ def test_logout_route(app, client) -> None:
 
     assert response.status_code == 200
     assert response.get_json() == {"logged_out": True}
+    assert calls == ["9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"]

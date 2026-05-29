@@ -381,6 +381,7 @@ command reference:
       [--json <json-object>] [--idempotency-key <key>]
   models start <project-id> <model-deployment-id> [--idempotency-key <key>]
   models stop <project-id> <model-deployment-id> [--idempotency-key <key>]
+  models hard-restart <project-id> <model-deployment-id> [--idempotency-key <key>]
   models sync <project-id> <model-deployment-id> [--idempotency-key <key>]
   models scale <project-id> <model-deployment-id> <replicas> [--idempotency-key <key>]
   models delete <project-id> <model-deployment-id> [--idempotency-key <key>]
@@ -558,6 +559,7 @@ Lifecycle commands:
 ```bash
 python -m poetry run miniten models stop <project-id> <model-deployment-id>
 python -m poetry run miniten models start <project-id> <model-deployment-id>
+python -m poetry run miniten models hard-restart <project-id> <model-deployment-id>
 python -m poetry run miniten models sync <project-id> <model-deployment-id>
 python -m poetry run miniten models scale <project-id> <model-deployment-id> 1
 python -m poetry run miniten models delete <project-id> <model-deployment-id>

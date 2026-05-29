@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from app.security.tokens import require_user_auth
+from app.security.tokens import current_user_id, require_user_auth
 from app.services import auth_service
 from app.utils.validation import require_field, require_json_object
 
@@ -37,9 +37,9 @@ def login() -> tuple[object, int]:
 def logout() -> tuple[object, int]:
     """End the current user session.
 
-    MVP bearer tokens are stateless, so clients logout by discarding the token.
-    The endpoint still exists for a consistent API/dashboard flow.
+    Logout revokes existing user access tokens by advancing the user's token
+    version. Clients should still discard their local token after this call.
     """
     # The auth decorator still matters: it prevents anonymous callers from
     # getting a successful logout response that looks like an authenticated flow.
-    return jsonify(auth_service.logout()), 200
+    return jsonify(auth_service.logout(current_user_id())), 200

@@ -481,7 +481,9 @@ User auth token required.
 
 ### Behavior
 
-If using stateless JWTs, the client can simply discard the token. The endpoint can still exist for consistent UX.
+The server increments the user's `token_version`, which invalidates previously
+issued user access tokens. Clients should also discard the local token after a
+successful logout response.
 
 ### Response
 
@@ -1934,7 +1936,71 @@ The Deployment Worker handles HPA first, then scales the Deployment to zero.
 
 ---
 
-## 6.8 Delete model
+## 6.8 Hard restart model
+
+```http
+POST /v1/projects/{projectID}/models/{modelDeploymentID}/hard-restart
+```
+
+### Purpose
+
+Force-recreates a model deployment when normal stop/start cannot recover it.
+
+Used by:
+
+```text
+Model dashboard hard restart button
+CLI hard-restart model command
+Operational recovery after stuck Kubernetes resources
+```
+
+### Auth
+
+User auth token required.
+
+### Permissions
+
+```text
+owner, member
+```
+
+### Behavior
+
+```text
+1. Verify user is project owner or member.
+2. Find model by projectID + modelDeploymentID.
+3. Update status = deploying and increment desired_generation.
+4. Insert deployment_jobs row with job_type = hard_restart_model and desired_generation.
+5. Store/replay idempotency response for the required Idempotency-Key.
+6. Return the deployment object and queued deployment job.
+```
+
+### Response
+
+```json
+{
+  "modelDeployment": {
+    "name": "qwen-small-prod",
+    "status": "deploying"
+  },
+  "deploymentJob": {
+    "job_type": "hard_restart_model",
+    "status": "queued"
+  }
+}
+```
+
+### Kubernetes actions
+
+```text
+None directly in the request handler.
+The Deployment Worker deletes runtime resources, then reapplies the Deployment,
+Service, HPA, Secret, and related manifests. The model cache PVC is retained.
+```
+
+---
+
+## 6.9 Delete model
 
 ```http
 DELETE /v1/projects/{projectID}/models/{modelDeploymentID}
@@ -2003,7 +2069,7 @@ The Deployment Worker deletes HPA, Service, Deployment, Secret, and other deploy
 
 ---
 
-## 6.9 Get model logs
+## 6.10 Get model logs
 
 ```http
 GET /v1/projects/{projectID}/models/{modelName}/logs

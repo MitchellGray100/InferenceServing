@@ -477,6 +477,9 @@ The Deployment Worker:
 - Marks stale jobs `skipped` without changing Kubernetes.
 - Calls the Kubernetes API.
 - Reapplies Kubernetes resources for `deploy_model`, `update_model`, and `start_model`.
+- Force-recreates runtime Kubernetes resources for `hard_restart_model` by deleting
+  the Deployment, Service, HPA, and Secret, then applying the deployment again
+  while retaining the model cache PVC.
 - Waits for Kubernetes readiness before marking deploy/update/start/scale jobs successful.
 - Detects pod scheduling, pod readiness, Service existence, Deployment availability, and common failed pod states such as image pull and crash-loop errors.
 - Classifies worker failures into stable categories such as `image_pull`,
@@ -764,7 +767,31 @@ Stopping a model does not delete its metadata or PVC cache.
 
 ---
 
-## 7.7 Scale Model Flow
+## 7.7 Hard Restart Model Flow
+
+```text
+User clicks Hard restart
+  ↓
+Flask route validates permissions
+  ↓
+Create hard_restart_model deployment_jobs row
+  ↓
+Deployment Worker claims job
+  ↓
+Delete runtime Kubernetes resources
+  ↓
+Reapply Deployment, Service, HPA, Secret, and related manifests
+  ↓
+Update model status to running
+```
+
+Hard restart is intended for recovery when normal stop/start cannot cleanly
+unstick a deployment. It keeps the model cache PVC by default so model weights
+do not need to be re-downloaded unless the cache itself is removed separately.
+
+---
+
+## 7.8 Scale Model Flow
 
 ```text
 User requests scale

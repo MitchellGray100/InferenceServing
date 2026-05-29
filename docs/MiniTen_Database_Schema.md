@@ -92,6 +92,7 @@ CREATE TABLE users (
 
   email TEXT NOT NULL UNIQUE,
   hashed_password TEXT NOT NULL,
+  token_version INTEGER NOT NULL DEFAULT 0,
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_login_at TIMESTAMP
@@ -105,6 +106,7 @@ CREATE TABLE users (
 | `user_id` | `UUID` | Yes | Primary key. Stable internal user identifier. |
 | `email` | `TEXT` | Yes | Unique email address used for login and project invitations. |
 | `hashed_password` | `TEXT` | Yes | Secure password hash. Never store plaintext passwords. |
+| `token_version` | `INTEGER` | Yes | Monotonic token version embedded in user JWTs. Incrementing it revokes older tokens. |
 | `created_at` | `TIMESTAMP` | Yes | Time the account was created. |
 | `last_login_at` | `TIMESTAMP` | No | Last successful login time. Nullable for newly created users. |
 
@@ -553,6 +555,7 @@ CREATE TABLE model_events (
     'model_running',
     'model_stopped',
     'model_started',
+    'model_hard_restarted',
     'model_updated',
     'model_scaled',
     'model_status_synced',
@@ -594,6 +597,7 @@ model_loading
 model_running
 model_stopped
 model_started
+model_hard_restarted
 model_updated
 model_scaled
 model_status_synced
@@ -923,6 +927,7 @@ CREATE TABLE deployment_jobs (
     'update_model',
     'start_model',
     'stop_model',
+    'hard_restart_model',
     'scale_model',
     'delete_model',
     'sync_status'
@@ -980,6 +985,7 @@ deploy_model
 update_model
 start_model
 stop_model
+hard_restart_model
 scale_model
 delete_model
 sync_status
@@ -991,6 +997,7 @@ sync_status
 | `update_model` | Reapply Kubernetes resources after settings changes. |
 | `start_model` | Scale a stopped deployment back up. |
 | `stop_model` | Scale a deployment down to zero. |
+| `hard_restart_model` | Force-delete runtime Kubernetes resources and recreate the deployment. |
 | `scale_model` | Change replica count or autoscaling settings. |
 | `delete_model` | Delete Kubernetes resources and mark the deployment deleted. |
 | `sync_status` | Reconcile MiniTen metadata with live Kubernetes state. |
@@ -1433,6 +1440,7 @@ CREATE TABLE users (
 
   email TEXT NOT NULL UNIQUE,
   hashed_password TEXT NOT NULL,
+  token_version INTEGER NOT NULL DEFAULT 0,
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_login_at TIMESTAMP
@@ -1573,6 +1581,7 @@ CREATE TABLE model_events (
     'model_running',
     'model_stopped',
     'model_started',
+    'model_hard_restarted',
     'model_updated',
     'model_scaled',
     'model_status_synced',
@@ -1620,6 +1629,7 @@ CREATE TABLE deployment_jobs (
     'update_model',
     'start_model',
     'stop_model',
+    'hard_restart_model',
     'scale_model',
     'delete_model',
     'sync_status'

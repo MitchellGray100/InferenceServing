@@ -45,7 +45,11 @@ def current_dashboard_user_id() -> str | None:
     if not token:
         return None
     try:
-        return require_existing_user_id(decode_access_token(token)["sub"])
+        payload = decode_access_token(token)
+        return require_existing_user_id(
+            payload["sub"],
+            payload.get("token_version", 0),
+        )
     except ApiError:
         session.clear()
         return None
@@ -214,6 +218,12 @@ def login() -> Any:
 @bp.post("/logout")
 def logout() -> Any:
     """Clear dashboard session state."""
+    current = current_dashboard_user_id()
+    if current is not None:
+        try:
+            auth_service.logout(current)
+        except ApiError:
+            pass
     session.clear()
     flash("Logged out.", "success")
     return redirect(url_for("dashboard.login"))

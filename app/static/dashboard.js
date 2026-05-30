@@ -58,6 +58,21 @@ async function copyText(button) {
 function updateAutoscalingFields(select) {
   const form = select.closest("form") || document;
   const enabled = select.value === "true";
+
+  form.querySelectorAll("[data-fixed-replica-field]").forEach((field) => {
+    const label = field.closest("label");
+    if (field.value) {
+      field.dataset.fixedReplicaValue = field.value;
+    }
+
+    field.disabled = enabled;
+    label?.classList.toggle("field-disabled", enabled);
+    if (!enabled && !field.value) {
+      field.value =
+        field.dataset.fixedReplicaValue || field.dataset.fixedReplicaDefault || "1";
+    }
+  });
+
   form.querySelectorAll("[data-autoscaling-field]").forEach((field) => {
     const label = field.closest("label");
     if (!enabled) {
@@ -72,8 +87,10 @@ function updateAutoscalingFields(select) {
 
     field.disabled = false;
     label?.classList.remove("field-disabled");
-    field.value =
-      field.dataset.autoscalingValue || field.dataset.autoscalingDefault || "";
+    if (!field.value) {
+      field.value =
+        field.dataset.autoscalingValue || field.dataset.autoscalingDefault || "";
+    }
   });
 }
 

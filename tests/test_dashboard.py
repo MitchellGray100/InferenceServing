@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app import create_app
@@ -192,6 +194,8 @@ def test_projects_page_lists_projects(monkeypatch):
     app = make_app()
     client = app.test_client()
     login(client, app)
+    with client.session_transaction() as session:
+        session["user_email"] = "user@example.com"
     monkeypatch.setattr(
         "app.routes.dashboard.project_service.list_projects",
         lambda current_user_id: {"projects": [project()]},
@@ -204,7 +208,33 @@ def test_projects_page_lists_projects(monkeypatch):
     assert b"miniten-logo.png" in response.data
     assert b'aria-label="MiniTen home"' in response.data
     assert b"Account" in response.data
+    assert b"user@example.com" in response.data
     assert b"Delete account" not in response.data
+
+
+def test_dashboard_login_stores_user_email(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+
+    with app.app_context():
+        token = create_access_token("11111111-1111-1111-1111-111111111111")
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.auth_service.login",
+        lambda email, password: {
+            "access_token": token,
+            "user": {"email": "user@example.com"},
+        },
+    )
+
+    response = client.post(
+        "/login",
+        data={"email": "user@example.com", "password": "password123"},
+    )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        assert session["user_email"] == "user@example.com"
 
 
 def test_account_page_shows_account_controls(monkeypatch):
@@ -364,10 +394,102 @@ def test_model_new_uses_low_memory_defaults(monkeypatch):
     assert b'name="max_model_len" type="number" min="1" value="256"' in response.data
     assert b'<option value="false" selected>false</option>' in response.data
     assert b'value="">default</option>' not in response.data
+    assert b"Fixed replicas" in response.data
+    assert (
+        b'name="replicas" type="number" min="0" value="1" data-fixed-replica-field '
+        b'data-fixed-replica-default="1" >'
+    ) in response.data
     assert b"data-autoscaling-toggle" in response.data
     assert b"data-autoscaling-field" in response.data
     assert b'name="min_replicas" type="number" min="1" value=""' in response.data
     assert b'data-autoscaling-default="1" disabled' in response.data
+
+
+def test_model_new_validation_error_stays_on_form_with_values(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+
+    def reject_create(user_id, project_id, data):
+        raise ApiError("validation_error", "CPU request is invalid.", 400)
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.create_model_deployment",
+        reject_create,
+    )
+
+    response = client.post(
+        f"/projects/{project()['projectID']}/models/new",
+        data={
+            "name": "small-llm",
+            "model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+            "replicas": "2",
+            "cpu_request": "bad-cpu",
+            "cpu_limit": "4",
+            "memory_request": "1Gi",
+            "memory_limit": "6Gi",
+            "gpu_count": "0",
+            "dtype": "auto",
+            "max_model_len": "256",
+            "autoscaling_enabled": "false",
+        },
+    )
+
+    assert response.status_code == 400
+    assert b"Deploy model" in response.data
+    assert b"CPU request is invalid." in response.data
+    assert b'value="small-llm"' in response.data
+    assert b'value="HuggingFaceTB/SmolLM2-135M-Instruct"' in response.data
+    assert b'value="bad-cpu"' in response.data
+    assert response.headers.get("Location") is None
+
+
+def test_model_new_autoscaling_disables_fixed_replicas_after_validation_error(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+
+    def reject_create(user_id, project_id, data):
+        raise ApiError("validation_error", "Model ID is invalid.", 400)
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.create_model_deployment",
+        reject_create,
+    )
+
+    response = client.post(
+        f"/projects/{project()['projectID']}/models/new",
+        data={
+            "name": "small-llm",
+            "model_id": "bad-model",
+            "cpu_request": "1",
+            "cpu_limit": "4",
+            "memory_request": "1Gi",
+            "memory_limit": "6Gi",
+            "gpu_count": "0",
+            "dtype": "auto",
+            "max_model_len": "256",
+            "autoscaling_enabled": "true",
+            "min_replicas": "2",
+            "max_replicas": "4",
+            "target_cpu_utilization": "70",
+        },
+    )
+
+    assert response.status_code == 400
+    assert b'<option value="true" selected>true</option>' in response.data
+    assert (
+        b'name="replicas" type="number" min="0" value="1" data-fixed-replica-field '
+        b'data-fixed-replica-default="1" disabled'
+    ) in response.data
 
 
 def test_model_detail_delete_requires_confirmation_and_failed_retry(monkeypatch):
@@ -413,9 +535,127 @@ def test_model_detail_delete_requires_confirmation_and_failed_retry(monkeypatch)
     assert b'data-auto-sync-interval-ms="120000"' in response.data
     assert b"Refresh jobs and status" in response.data
     assert b"&#8635;" in response.data
-    assert b'aria-label="Replicas" disabled title="Autoscaling manages replicas"' in response.data
-    assert b"Disable autoscaling before manually scaling replicas." in response.data
-    assert b"Autoscaling manages replicas." in response.data
+    assert b'aria-label="Replicas"' not in response.data
+    assert b"Scale</button>" not in response.data
+    assert b"Disable autoscaling before manually scaling replicas." not in response.data
+
+
+def test_model_detail_populates_current_deployment_settings(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    current_model = model(
+        replicas=2,
+        resources={
+            "cpu_request": "750m",
+            "cpu_limit": "3",
+            "memory_request": "2Gi",
+            "memory_limit": "5Gi",
+            "gpu_count": 1,
+        },
+        vllm={
+            "image": "vllm/vllm-openai:latest",
+            "dtype": "float16",
+            "max_model_len": 768,
+        },
+        autoscaling={
+            "enabled": True,
+            "min_replicas": 2,
+            "max_replicas": 4,
+            "target_cpu_utilization": 65,
+        },
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.get_model_deployment",
+        lambda user_id, project_id, model_id: current_model,
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.list_model_deployment_jobs",
+        lambda user_id, project_id, model_id: {"deploymentJobs": []},
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.get_model_deployment_status",
+        lambda user_id, project_id, model_id: {"kubernetes": {}},
+    )
+
+    response = client.get(
+        f"/projects/{project()['projectID']}/models/{model()['modelDeploymentID']}"
+    )
+
+    assert response.status_code == 200
+    assert b'aria-label="Replicas"' not in response.data
+    assert (
+        b'name="replicas" type="number" min="0" value="2" data-fixed-replica-field '
+        b'data-fixed-replica-default="1" disabled'
+    ) in response.data
+    assert b'name="cpu_request" placeholder="1" value="750m"' in response.data
+    assert b'name="cpu_limit" placeholder="4" value="3"' in response.data
+    assert b'name="memory_request" placeholder="1Gi" value="2Gi"' in response.data
+    assert b'name="memory_limit" placeholder="6Gi" value="5Gi"' in response.data
+    assert b'name="gpu_count" type="number" min="0" value="1"' in response.data
+    assert b'<option value="float16" selected>float16</option>' in response.data
+    assert b'name="max_model_len" type="number" min="1" value="768"' in response.data
+    assert b'<option value="true" selected>true</option>' in response.data
+    assert b'name="min_replicas" type="number" min="1" value="2"' in response.data
+    assert b'name="max_replicas" type="number" min="1" value="4"' in response.data
+    assert b'name="target_cpu_utilization" type="number" min="1" max="100" value="65"' in response.data
+
+
+def test_model_detail_fixed_replicas_enabled_when_autoscaling_disabled(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    current_model = model(
+        replicas=3,
+        autoscaling={
+            "enabled": False,
+            "min_replicas": None,
+            "max_replicas": None,
+            "target_cpu_utilization": None,
+        },
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.get_model_deployment",
+        lambda user_id, project_id, model_id: current_model,
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.list_model_deployment_jobs",
+        lambda user_id, project_id, model_id: {"deploymentJobs": []},
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.get_model_deployment_status",
+        lambda user_id, project_id, model_id: {"kubernetes": {}},
+    )
+
+    response = client.get(
+        f"/projects/{project()['projectID']}/models/{model()['modelDeploymentID']}"
+    )
+
+    assert response.status_code == 200
+    assert (
+        b'name="replicas" type="number" min="0" value="3" data-fixed-replica-field '
+        b'data-fixed-replica-default="1" >'
+    ) in response.data
+
+
+def test_autoscaling_script_preserves_server_rendered_values():
+    script = (Path(__file__).resolve().parents[1] / "app" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if (!field.value)" in script
+    assert "field.dataset.autoscalingValue || field.dataset.autoscalingDefault" in script
+    assert "data-fixed-replica-field" in script
+    assert "field.disabled = enabled" in script
+    assert "field.dataset.fixedReplicaValue || field.dataset.fixedReplicaDefault" in script
 
 
 def test_api_key_created_page_has_copy_button(monkeypatch):

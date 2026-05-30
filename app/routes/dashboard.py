@@ -39,6 +39,15 @@ bp = Blueprint("dashboard", __name__)
 Handler = Callable[..., Any]
 
 
+@bp.context_processor
+def inject_dashboard_user() -> dict[str, str | None]:
+    """Expose a lightweight user label for the dashboard shell."""
+    email = session.get("user_email")
+    if isinstance(email, str) and email:
+        return {"dashboard_user_email": email}
+    return {"dashboard_user_email": None}
+
+
 def current_dashboard_user_id() -> str | None:
     """Return the logged-in dashboard user ID, clearing stale tokens."""
     token = session.get("access_token")
@@ -48,7 +57,7 @@ def current_dashboard_user_id() -> str | None:
         payload = decode_access_token(token)
         return require_existing_user_id(
             payload["sub"],
-            payload.get("token_version", 0),
+            payload["token_version"],
         )
     except ApiError:
         session.clear()
@@ -89,11 +98,19 @@ def run_form_action(success_message: str, fallback: str, action: Callable[[], An
     return redirect(fallback)
 
 
-def optional_int(value: str | None) -> int | None:
+def optional_int(value: str | None, field: str = "value") -> int | None:
     """Convert optional numeric form input into int or None."""
     if value is None or value == "":
         return None
-    return int(value)
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ApiError(
+            type="validation_error",
+            message=f"{field} must be an integer.",
+            status_code=400,
+            details={"field": field},
+        ) from exc
 
 
 def required_int(value: str | None, field: str) -> int:
@@ -130,7 +147,7 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
         data["name"] = request.form.get("name", "")
         data["model_id"] = request.form.get("model_id", "")
 
-    replicas = optional_int(request.form.get("replicas"))
+    replicas = optional_int(request.form.get("replicas"), "replicas")
     if replicas is not None:
         data["replicas"] = replicas
 
@@ -139,7 +156,7 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
         "cpu_limit": request.form.get("cpu_limit") or None,
         "memory_request": request.form.get("memory_request") or None,
         "memory_limit": request.form.get("memory_limit") or None,
-        "gpu_count": optional_int(request.form.get("gpu_count")),
+        "gpu_count": optional_int(request.form.get("gpu_count"), "gpu_count"),
     }
     resources = {key: value for key, value in resources.items() if value is not None}
     if resources:
@@ -147,7 +164,7 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
 
     vllm = {
         "dtype": request.form.get("dtype") or None,
-        "max_model_len": optional_int(request.form.get("max_model_len")),
+        "max_model_len": optional_int(request.form.get("max_model_len"), "max_model_len"),
     }
     vllm = {key: value for key, value in vllm.items() if value is not None}
     if vllm:
@@ -155,10 +172,11 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
 
     autoscaling = {
         "enabled": bool_field(request.form.get("autoscaling_enabled")),
-        "min_replicas": optional_int(request.form.get("min_replicas")),
-        "max_replicas": optional_int(request.form.get("max_replicas")),
+        "min_replicas": optional_int(request.form.get("min_replicas"), "min_replicas"),
+        "max_replicas": optional_int(request.form.get("max_replicas"), "max_replicas"),
         "target_cpu_utilization": optional_int(
-            request.form.get("target_cpu_utilization")
+            request.form.get("target_cpu_utilization"),
+            "target_cpu_utilization",
         ),
     }
     autoscaling = {
@@ -168,6 +186,33 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
         data["autoscaling"] = autoscaling
 
     return data
+
+
+def model_form_values_from_request() -> dict[str, Any]:
+    """Return a model-shaped object that preserves submitted form values."""
+    autoscaling_enabled = bool_field(request.form.get("autoscaling_enabled")) is True
+    return {
+        "name": request.form.get("name", ""),
+        "model_id": request.form.get("model_id", ""),
+        "replicas": request.form.get("replicas", "1"),
+        "resources": {
+            "cpu_request": request.form.get("cpu_request", "1"),
+            "cpu_limit": request.form.get("cpu_limit", "4"),
+            "memory_request": request.form.get("memory_request", "1Gi"),
+            "memory_limit": request.form.get("memory_limit", "6Gi"),
+            "gpu_count": request.form.get("gpu_count", "0"),
+        },
+        "vllm": {
+            "dtype": request.form.get("dtype", "auto"),
+            "max_model_len": request.form.get("max_model_len", "256"),
+        },
+        "autoscaling": {
+            "enabled": autoscaling_enabled,
+            "min_replicas": request.form.get("min_replicas", ""),
+            "max_replicas": request.form.get("max_replicas", ""),
+            "target_cpu_utilization": request.form.get("target_cpu_utilization", ""),
+        },
+    }
 
 
 def idempotency_key(action: str) -> str:
@@ -208,6 +253,7 @@ def login() -> Any:
                 request.form.get("password"),
             )
             session["access_token"] = response["access_token"]
+            session["user_email"] = response["user"]["email"]
             flash("Logged in.", "success")
             return redirect(request.args.get("next") or url_for("dashboard.projects"))
         except ApiError as exc:
@@ -384,20 +430,30 @@ def api_key_revoke(project_id: str, api_key_id: str) -> Any:
 @require_dashboard_user
 def model_new(project_id: str) -> Any:
     """Create a model deployment."""
+    current = user_id()
     if request.method == "POST":
-        return run_form_action(
-            "Model deploy job queued.",
-            url_for("dashboard.project_detail", project_id=project_id),
-            lambda: model_deployment_service.create_model_deployment(
-                user_id(),
+        try:
+            model_deployment_service.create_model_deployment(
+                current,
                 project_id,
                 deployment_settings_from_form(include_identity=True),
-            ),
-        )
+            )
+            flash("Model deploy job queued.", "success")
+            return redirect(url_for("dashboard.project_detail", project_id=project_id))
+        except ApiError as exc:
+            flash(exc.message, "error")
+            return (
+                render_template(
+                    "dashboard/model_form.html",
+                    project=project_service.get_project(current, project_id),
+                    model=model_form_values_from_request(),
+                ),
+                exc.status_code if exc.status_code < 500 else 400,
+            )
 
     return render_template(
         "dashboard/model_form.html",
-        project=project_service.get_project(user_id(), project_id),
+        project=project_service.get_project(current, project_id),
         model=None,
     )
 

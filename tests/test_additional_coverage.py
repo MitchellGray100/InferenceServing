@@ -70,6 +70,7 @@ def deployment_payload(**overrides):
         "k8s_service_name": "qwen-small-prod",
         "k8s_hpa_name": "qwen-small-prod-v1",
         "replicas": 1,
+        "desired_generation": 1,
         "cpu_request": "2",
         "cpu_limit": "4",
         "memory_request": "8Gi",
@@ -103,6 +104,7 @@ def job_row(job_type="deploy_model", **overrides):
         "project_id": "a2fc41b7-862e-4060-b466-2376f29227bb",
         "model_deployment_id": "bf3dc090-5bb4-46f6-964d-6cd8375ddf56",
         "job_type": job_type,
+        "desired_generation": 1,
         "attempts": 0,
         "max_attempts": 3,
     }
@@ -242,7 +244,7 @@ def test_require_existing_user_id_rejects_missing_user(monkeypatch) -> None:
     monkeypatch.setattr(token_service, "transaction", fake.transaction)
 
     with pytest.raises(ApiError) as error:
-        require_existing_user_id("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e")
+        require_existing_user_id("9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e", 0)
 
     assert error.value.type == "unauthorized"
 

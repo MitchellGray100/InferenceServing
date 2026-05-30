@@ -231,6 +231,24 @@ pre {
   gap: 14px;
 }
 
+.user-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.user-email {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .page,
 .public-page {
   margin: 0 auto;
@@ -546,6 +564,11 @@ pre {
   }
 
   .nav {
+    width: 100%;
+  }
+
+  .user-actions {
+    margin-left: 0;
     width: 100%;
   }
 

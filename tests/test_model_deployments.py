@@ -575,6 +575,25 @@ def test_validate_deployment_spec_rejects_bad_autoscaling(app) -> None:
     assert error.value.type == "validation_error"
 
 
+def test_validate_deployment_spec_defaults_replicas_to_hpa_min(app) -> None:
+    with app.app_context():
+        spec = validate_deployment_spec(
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "autoscaling": {
+                    "enabled": True,
+                    "min_replicas": 2,
+                    "max_replicas": 4,
+                },
+            }
+        )
+
+    assert spec["autoscaling_enabled"] is True
+    assert spec["replicas"] == 2
+    assert spec["min_replicas"] == 2
+
+
 def test_validate_deployment_spec_rejects_unknown_fields(app) -> None:
     with app.app_context(), pytest.raises(ApiError) as error:
         validate_deployment_spec(
@@ -644,6 +663,26 @@ def test_validate_deployment_update_reselects_gpu_image(app) -> None:
     assert spec["name"] == current["name"]
     assert spec["gpu_count"] == 1
     assert spec["vllm_image"] == "vllm/vllm-openai:latest"
+
+
+def test_validate_deployment_update_defaults_replicas_to_hpa_min(app) -> None:
+    current = deployment_row_fixture()
+    current["replicas"] = 1
+    with app.app_context():
+        spec = model_deployment_service.validate_deployment_update(
+            {
+                "autoscaling": {
+                    "enabled": True,
+                    "min_replicas": 3,
+                    "max_replicas": 5,
+                }
+            },
+            current,
+        )
+
+    assert spec["autoscaling_enabled"] is True
+    assert spec["replicas"] == 3
+    assert spec["min_replicas"] == 3
 
 
 def test_validate_deployment_update_rejects_identity_changes(app) -> None:

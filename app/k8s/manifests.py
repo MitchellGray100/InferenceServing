@@ -135,9 +135,7 @@ def build_deployment_manifest(
                 "metadata": {
                     "labels": labels,
                     "annotations": {
-                        "miniten.io/desired-generation": str(
-                            deployment.get("desired_generation", 1)
-                        ),
+                        "miniten.io/desired-generation": str(deployment["desired_generation"]),
                     },
                 },
                 "spec": pod_spec,

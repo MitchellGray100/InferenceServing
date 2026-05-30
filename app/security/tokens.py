@@ -68,11 +68,14 @@ def decode_access_token(token: str) -> dict[str, Any]:
     if payload.get("type") != TOKEN_TYPE or not payload.get("sub"):
         logger.info("Rejected access token with invalid type or subject.")
         raise unauthorized_error()
+    if "token_version" not in payload:
+        logger.info("Rejected access token without token_version.")
+        raise unauthorized_error()
 
     return payload
 
 
-def require_existing_user_id(user_id: Any, token_version: Any = 0) -> str:
+def require_existing_user_id(user_id: Any, token_version: Any) -> str:
     """Require that a token subject maps to a current row and token version."""
     try:
         canonical_user_id = validate_uuid(user_id, "userID")
@@ -93,7 +96,7 @@ def require_existing_user_id(user_id: Any, token_version: Any = 0) -> str:
         raise unauthorized_error()
     try:
         presented_version = int(token_version)
-        current_version = int(row.get("token_version", 0))
+        current_version = int(row["token_version"])
     except (TypeError, ValueError) as exc:
         logger.info("Rejected access token with invalid token_version.")
         raise unauthorized_error() from exc
@@ -142,7 +145,7 @@ def require_user_auth(view: F) -> F:
         payload = decode_access_token(token)
         g.current_user_id = require_existing_user_id(
             payload["sub"],
-            payload.get("token_version", 0),
+            payload["token_version"],
         )
         logger.debug("Authenticated user request user_id=%s.", g.current_user_id)
         return view(*args, **kwargs)

@@ -636,9 +636,7 @@ def delete_model_deployment(
 
             payload_source = dict(current)
             payload_source["status"] = "deleting"
-            payload_source["desired_generation"] = int(
-                payload_source.get("desired_generation", 1)
-            ) + 1
+            payload_source["desired_generation"] = int(payload_source["desired_generation"]) + 1
             cur.execute(
                 queries.get("advance_model_deployment_delete_requested"),
                 {"model_deployment_id": canonical_model_deployment_id},
@@ -773,11 +771,6 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
     # non-autoscaled deployments simple: the worker reads `replicas` as the
     # desired fixed replica count and ignores HPA fields.
     autoscaling_enabled = bool(autoscaling.get("enabled", False))
-    replicas = validate_positive_int(
-        data.get("replicas", current_app.config["DEFAULT_MODEL_REPLICAS"]),
-        "replicas",
-        max_value=MAX_REPLICAS,
-    )
     min_replicas = _optional_positive_int(
         autoscaling.get("min_replicas"),
         "min_replicas",
@@ -791,6 +784,16 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
         default=current_app.config["DEFAULT_HPA_MAX_REPLICAS"]
         if autoscaling_enabled
         else None,
+    )
+    replica_default = (
+        min_replicas
+        if autoscaling_enabled and data.get("replicas") is None
+        else current_app.config["DEFAULT_MODEL_REPLICAS"]
+    )
+    replicas = validate_positive_int(
+        data.get("replicas", replica_default),
+        "replicas",
+        max_value=MAX_REPLICAS,
     )
 
     if autoscaling_enabled and min_replicas and max_replicas and min_replicas > max_replicas:
@@ -920,6 +923,11 @@ def validate_deployment_update(data: dict[str, Any], current: dict[str, Any]) ->
             **_optional_dict(data.get("autoscaling"), "autoscaling"),
         },
     }
+    if merged["autoscaling"]["enabled"] and "replicas" not in data:
+        merged["replicas"] = (
+            merged["autoscaling"].get("min_replicas")
+            or current_app.config["DEFAULT_HPA_MIN_REPLICAS"]
+        )
     return validate_deployment_spec(merged)
 
 
@@ -1192,7 +1200,7 @@ def build_job_payload(
         "k8s_service_name": deployment["k8s_service_name"],
         "k8s_hpa_name": deployment["k8s_hpa_name"],
         "replicas": deployment["replicas"],
-        "desired_generation": deployment.get("desired_generation", 1),
+        "desired_generation": deployment["desired_generation"],
         "autoscaling_enabled": deployment["autoscaling_enabled"],
     }
 
@@ -1215,7 +1223,7 @@ def serialize_model_deployment(row: Any) -> dict[str, Any]:
         "k8s_service_name": row["k8s_service_name"],
         "k8s_hpa_name": row["k8s_hpa_name"],
         "replicas": row["replicas"],
-        "desired_generation": row.get("desired_generation", 1),
+        "desired_generation": row["desired_generation"],
         "resources": {
             "cpu_request": row["cpu_request"],
             "cpu_limit": row["cpu_limit"],
@@ -1249,7 +1257,7 @@ def serialize_deployment_job(row: Any) -> dict[str, Any]:
         if row["model_deployment_id"] is not None
         else None,
         "job_type": row["job_type"],
-        "desired_generation": row.get("desired_generation", 1),
+        "desired_generation": row["desired_generation"],
         "status": row["status"],
         "attempts": row["attempts"],
         "max_attempts": row["max_attempts"],

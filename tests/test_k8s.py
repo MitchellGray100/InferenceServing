@@ -40,6 +40,7 @@ def deployment_payload(autoscaling_enabled: bool = True) -> dict[str, object]:
         "k8s_service_name": "qwen-small-prod",
         "k8s_hpa_name": "qwen-small-prod-v1",
         "replicas": 1,
+        "desired_generation": 1,
         "cpu_request": "2",
         "cpu_limit": "4",
         "memory_request": "8Gi",

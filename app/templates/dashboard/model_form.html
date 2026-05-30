@@ -9,12 +9,13 @@
 </section>
 
 <form method="post" class="settings-form">
+  {% set autoscaling_enabled = model.autoscaling.enabled if model else false %}
   <section class="panel">
     <h2>Identity</h2>
     <div class="form-grid">
-      <label>Name <input name="name" required placeholder="qwen-small-prod"></label>
-      <label>Hugging Face model ID <input name="model_id" required placeholder="Qwen/Qwen2.5-0.5B-Instruct"></label>
-      <label>Replicas <input name="replicas" type="number" min="0" value="{{ model.replicas if model else 1 }}"></label>
+      <label>Name <input name="name" required placeholder="qwen-small-prod" value="{{ model.name if model else '' }}"></label>
+      <label>Hugging Face model ID <input name="model_id" required placeholder="Qwen/Qwen2.5-0.5B-Instruct" value="{{ model.model_id if model else '' }}"></label>
+      <label>Fixed replicas <input name="replicas" type="number" min="0" value="{{ model.replicas if model else 1 }}" data-fixed-replica-field data-fixed-replica-default="1" {% if autoscaling_enabled %}disabled{% endif %}></label>
     </div>
   </section>
   {% include "dashboard/model_settings_fields.html" %}

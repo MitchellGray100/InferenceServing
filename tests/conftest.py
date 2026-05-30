@@ -16,9 +16,9 @@ def stub_auth_user_existence(monkeypatch, request):
 
     monkeypatch.setattr(
         "app.security.tokens.require_existing_user_id",
-        lambda user_id, token_version=0: str(user_id),
+        lambda user_id, token_version: str(user_id),
     )
     monkeypatch.setattr(
         "app.routes.dashboard.require_existing_user_id",
-        lambda user_id, token_version=0: str(user_id),
+        lambda user_id, token_version: str(user_id),
     )

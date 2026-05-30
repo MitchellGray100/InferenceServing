@@ -73,7 +73,7 @@ def login(email: Any, password: Any) -> dict[str, Any]:
         # in `Authorization: Bearer ...` for control-plane requests.
         "access_token": create_access_token(
             str(auth_row["user_id"]),
-            token_version=int(auth_row.get("token_version", 0)),
+            token_version=int(auth_row["token_version"]),
         ),
         "token_type": "bearer",
         "user": serialize_user(user_row),

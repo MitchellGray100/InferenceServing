@@ -199,9 +199,7 @@ def fetch_deployment_for_job(job: dict[str, Any]) -> dict[str, Any]:
 
 def is_stale_job(job: dict[str, Any], deployment: dict[str, Any]) -> bool:
     """Return whether a newer desired generation superseded this job."""
-    return int(job.get("desired_generation", 1)) != int(
-        deployment.get("desired_generation", 1)
-    )
+    return int(job["desired_generation"]) != int(deployment["desired_generation"])
 
 
 def is_noop_job(job: dict[str, Any]) -> bool:

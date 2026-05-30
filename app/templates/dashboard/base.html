@@ -18,9 +18,14 @@
         <a href="{{ url_for('dashboard.inference') }}">Inference</a>
         <a href="{{ url_for('dashboard.account') }}">Account</a>
       </nav>
-      <form method="post" action="{{ url_for('dashboard.logout') }}">
-        <button class="ghost" type="submit">Log out</button>
-      </form>
+      <div class="user-actions">
+        {% if dashboard_user_email %}
+          <span class="user-email" title="{{ dashboard_user_email }}">{{ dashboard_user_email }}</span>
+        {% endif %}
+        <form method="post" action="{{ url_for('dashboard.logout') }}">
+          <button class="ghost" type="submit">Log out</button>
+        </form>
+      </div>
     </header>
     <main class="page">
       {% with messages = get_flashed_messages(with_categories=true) %}

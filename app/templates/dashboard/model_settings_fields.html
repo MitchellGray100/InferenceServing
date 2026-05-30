@@ -1,6 +1,11 @@
+{% set autoscaling_enabled = model.autoscaling.enabled if model else false %}
+{% set show_fixed_replicas = model and model.modelDeploymentID %}
 <section class="panel">
   <h2>Resources</h2>
   <div class="form-grid">
+    {% if show_fixed_replicas %}
+      <label>Fixed replicas <input name="replicas" type="number" min="0" value="{{ model.replicas }}" data-fixed-replica-field data-fixed-replica-default="1" {% if autoscaling_enabled %}disabled{% endif %}></label>
+    {% endif %}
     <label>CPU request <input name="cpu_request" placeholder="1" value="{{ model.resources.cpu_request if model else '1' }}"></label>
     <label>CPU limit <input name="cpu_limit" placeholder="4" value="{{ model.resources.cpu_limit if model else '4' }}"></label>
     <label>Memory request <input name="memory_request" placeholder="1Gi" value="{{ model.resources.memory_request if model else '1Gi' }}"></label>
@@ -23,7 +28,6 @@
 </section>
 <section class="panel">
   <h2>Autoscaling</h2>
-  {% set autoscaling_enabled = model.autoscaling.enabled if model else false %}
   <div class="form-grid">
     <label>Enabled
       <select name="autoscaling_enabled" data-autoscaling-toggle>

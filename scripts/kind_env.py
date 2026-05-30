@@ -393,9 +393,15 @@ def require_tool(name: str) -> None:
         return
 
     if name == "kind":
-        hint = "Install with: winget install --id Kubernetes.kind --exact"
+        hint = (
+            "Install kind with Homebrew (`brew install kind`), Chocolatey "
+            "(`choco install kind -y`), or the Linux binary install steps in README.md."
+        )
     elif name == "kubectl":
-        hint = "Install with: winget install --id Kubernetes.kubectl --exact"
+        hint = (
+            "Install kubectl with Homebrew (`brew install kubectl`), Chocolatey "
+            "(`choco install kubernetes-cli -y`), or the Debian/Ubuntu steps in README.md."
+        )
     else:
         hint = "Install Docker Desktop and make sure Docker is running."
 

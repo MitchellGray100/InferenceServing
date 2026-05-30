@@ -678,7 +678,7 @@ def test_api_key_created_page_has_copy_button(monkeypatch):
     assert b'data-copy-target="#created-api-key"' in response.data
 
 
-def test_api_key_revoke_missing_is_idempotent(monkeypatch):
+def test_api_key_revoke_missing_shows_warning(monkeypatch):
     app = make_app()
     client = app.test_client()
     login(client, app)

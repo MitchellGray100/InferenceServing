@@ -79,7 +79,6 @@ def run_real_k8s_smoke_test(
             "POST",
             f"/v1/projects/{project_id}/models",
             token=token,
-            headers={"Idempotency-Key": f"deploy-{suffix}"},
             json={
                 "name": model_name,
                 "model_id": model_id,
@@ -120,7 +119,6 @@ def run_real_k8s_smoke_test(
             "PATCH",
             f"/v1/projects/{project_id}/models/{model_deployment_id}",
             token=token,
-            headers={"Idempotency-Key": f"update-{suffix}"},
             json={
                 "replicas": 2,
                 "autoscaling": {
@@ -157,7 +155,6 @@ def run_real_k8s_smoke_test(
             "POST",
             f"/v1/projects/{project_id}/models/{model_deployment_id}/sync",
             token=token,
-            headers={"Idempotency-Key": f"sync-{suffix}"},
             expected_status=202,
         )
         wait_for_deployment_job(
@@ -215,7 +212,6 @@ def run_real_k8s_smoke_test(
             "DELETE",
             f"/v1/projects/{project_id}/models/{model_deployment_id}",
             token=token,
-            headers={"Idempotency-Key": f"delete-{suffix}"},
             expected_status=202,
         )
         wait_for_deployment_job(
@@ -463,7 +459,6 @@ def cleanup(
                 "DELETE",
                 f"/v1/projects/{project_id}/models/{model_deployment_id}",
                 token=token,
-                headers={"Idempotency-Key": f"cleanup-{uuid.uuid4().hex}"},
                 expected_status={202, 404},
             )
         except Exception:

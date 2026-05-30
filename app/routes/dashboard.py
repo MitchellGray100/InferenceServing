@@ -7,7 +7,6 @@ web and terminal workflows without learning a second product model.
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -213,11 +212,6 @@ def model_form_values_from_request() -> dict[str, Any]:
             "target_cpu_utilization": request.form.get("target_cpu_utilization", ""),
         },
     }
-
-
-def idempotency_key(action: str) -> str:
-    """Generate an idempotency key for dashboard control-plane forms."""
-    return f"web-{action}-{uuid.uuid4()}"
 
 
 @bp.get("/")

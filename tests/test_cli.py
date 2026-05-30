@@ -93,7 +93,7 @@ def test_api_key_create_can_save_project_key(cli_config, monkeypatch):
     )
 
 
-def test_model_deploy_sends_settings_and_idempotency_key(cli_config, calls):
+def test_model_deploy_sends_settings(cli_config, calls):
     write_config(cli_config, access_token="user-token")
 
     exit_code = cli.main(
@@ -121,15 +121,12 @@ def test_model_deploy_sends_settings_and_idempotency_key(cli_config, calls):
             "1",
             "--max-replicas",
             "2",
-            "--idempotency-key",
-            "deploy-key",
         ]
     )
 
     assert exit_code == 0
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"].endswith("/v1/projects/project-id/models")
-    assert calls[0]["headers"]["Idempotency-Key"] == "deploy-key"
     assert calls[0]["json"] == {
         "name": "qwen",
         "model_id": "Qwen/Qwen2.5-0.5B-Instruct",

@@ -41,8 +41,9 @@ services:
       ]
 
   worker:
-    # MVP: run exactly one deployment worker process. Do not scale this service
-    # until per-model worker serialization and lease renewal are implemented.
+    # Local deployment worker. Multiple workers can process different models,
+    # but this Compose service is normally kept at one replica for predictable
+    # local logs and resource usage.
     build: .
     network_mode: host
     depends_on:

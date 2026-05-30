@@ -12,7 +12,6 @@ from typing import Any
 from app.config import Config
 from app.db.pool import transaction
 from app.db.sql import load_queries
-from app.k8s import client as k8s_client
 from app.utils.errors import ApiError
 from app.utils.time import to_iso8601
 from app.utils.validation import (
@@ -114,10 +113,9 @@ def get_project(user_id: Any, project_id: Any) -> dict[str, Any]:
 def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
     """Delete a project when the current user is an owner.
 
-    The project owns a Kubernetes namespace, so namespace deletion removes all
-    model pods, services, HPAs, PVCs, and secrets before database metadata is
-    removed. If Kubernetes cleanup fails, the database row is kept so operators
-    can retry deletion instead of orphaning resources.
+    The project owns a Kubernetes namespace. The API deletes product metadata
+    immediately and queues namespace cleanup for the deployment worker so slow
+    Kubernetes operations do not block the request.
     """
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
@@ -136,10 +134,9 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
         logger.info("Project delete missed project_id=%s.", canonical_project_id)
         raise project_not_found_error()
 
-    delete_project_kubernetes_namespace(project["k8s_namespace"])
-
     with transaction() as conn:
         with conn.cursor() as cur:
+            enqueue_project_cleanup_job_with_cursor(cur, project)
             cur.execute(
                 queries.get("delete_project"),
                 {"project_id": canonical_project_id},
@@ -161,9 +158,9 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
 def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
     """Delete projects that would become orphaned by deleting a sole member.
 
-    Kubernetes namespaces are deleted before database rows. If any namespace
-    cleanup fails, project rows are left in place so account deletion can be
-    retried without losing track of live resources.
+    Namespace cleanup is queued before database rows are deleted, so account
+    deletion does not leave project Kubernetes resources without a retryable
+    cleanup record.
     """
     canonical_user_id = validate_uuid(user_id, "userID")
 
@@ -175,13 +172,11 @@ def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
             )
             projects = cur.fetchall()
 
-    for project in projects:
-        delete_project_kubernetes_namespace(project["k8s_namespace"])
-
     deleted_projects: list[dict[str, Any]] = []
     with transaction() as conn:
         with conn.cursor() as cur:
             for project in projects:
+                enqueue_project_cleanup_job_with_cursor(cur, project)
                 cur.execute(
                     queries.get("delete_project"),
                     {"project_id": project["project_id"]},
@@ -200,18 +195,23 @@ def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
     return deleted_projects
 
 
-def delete_project_kubernetes_namespace(k8s_namespace: str) -> None:
-    """Delete the project namespace unless the worker is in dry-run mode."""
-    if Config.WORKER_DRY_RUN:
-        logger.info(
-            "Dry-run skipped Kubernetes project namespace deletion namespace=%s.",
-            k8s_namespace,
-        )
-        return
-
-    clients = k8s_client.create_clients()
-    k8s_client.delete_namespace(clients, k8s_namespace)
-    logger.info("Deleted Kubernetes project namespace namespace=%s.", k8s_namespace)
+def enqueue_project_cleanup_job_with_cursor(cur: Any, project: Any) -> Any:
+    """Insert a durable namespace cleanup job before deleting project metadata."""
+    cur.execute(
+        queries.get("create_project_cleanup_job"),
+        {
+            "project_id": project["project_id"],
+            "k8s_namespace": project["k8s_namespace"],
+        },
+    )
+    job = cur.fetchone()
+    logger.debug(
+        "Queued project cleanup job job_id=%s project_id=%s namespace=%s.",
+        job["project_cleanup_job_id"],
+        project["project_id"],
+        project["k8s_namespace"],
+    )
+    return job
 
 
 def list_project_members(user_id: Any, project_id: Any) -> dict[str, list[dict[str, Any]]]:

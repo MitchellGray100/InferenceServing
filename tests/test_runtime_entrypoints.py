@@ -177,21 +177,78 @@ def test_kind_env_delete_skips_missing_kind(monkeypatch, tmp_path) -> None:
     assert kubeconfig.exists() is False
 
 
+def test_kind_env_start_existing_stopped_node(monkeypatch) -> None:
+    """start-kind should start an existing stopped kind node without deleting it."""
+    calls = []
+
+    monkeypatch.setattr(kind_env, "require_tool", lambda name: calls.append(("tool", name)))
+    monkeypatch.setattr(kind_env, "docker_container_exists", lambda name: True)
+    monkeypatch.setattr(kind_env, "docker_container_running", lambda name: False)
+    monkeypatch.setattr(kind_env, "run", lambda args, capture=False: calls.append(tuple(args)))
+
+    kind_env.start_kind_environment("miniten")
+
+    assert ("docker", "start", "miniten-control-plane") in calls
+    assert not any(call[:3] == ("kind", "delete", "cluster") for call in calls)
+
+
+def test_kind_env_stop_existing_running_node(monkeypatch) -> None:
+    """stop-kind should stop the kind node while preserving its container state."""
+    calls = []
+
+    monkeypatch.setattr(kind_env.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(kind_env, "docker_container_exists", lambda name: True)
+    monkeypatch.setattr(kind_env, "docker_container_running", lambda name: True)
+    monkeypatch.setattr(kind_env, "run", lambda args, capture=False: calls.append(tuple(args)))
+
+    kind_env.stop_kind_environment("miniten")
+
+    assert ("docker", "stop", "miniten-control-plane") in calls
+    assert not any(call[:3] == ("kind", "delete", "cluster") for call in calls)
+
+
+def test_kind_env_validation_retries_until_rbac_ready(monkeypatch) -> None:
+    """kind validation should tolerate brief API/RBAC startup races."""
+    calls = []
+    attempts = {"can_i": 0}
+
+    def fake_run(args, capture=False):
+        calls.append(tuple(args))
+        if args[:3] == ["kubectl", "auth", "can-i"]:
+            attempts["can_i"] += 1
+            if attempts["can_i"] == 1:
+                raise RuntimeError("services is forbidden")
+            return subprocess.CompletedProcess(args, 0, stdout="yes\n")
+        return subprocess.CompletedProcess(args, 0, stdout="")
+
+    monkeypatch.setattr(kind_env, "run", fake_run)
+    monkeypatch.setattr(kind_env.time, "sleep", lambda seconds: None)
+
+    kind_env.validate_kind_environment("miniten")
+
+    assert attempts["can_i"] == 2
+    assert ("kubectl", "get", "nodes", "--context", "kind-miniten") in calls
+
+
 def test_kind_env_gpu_ensure_runs_gpu_setup(monkeypatch) -> None:
     """GPU kind setup verifies Docker GPU access before configuring the node."""
     calls = []
 
     monkeypatch.setattr(kind_env, "require_tool", lambda name: calls.append(("tool", name)))
     monkeypatch.setattr(kind_env, "existing_clusters", lambda: {"miniten"})
+    monkeypatch.setattr(kind_env, "start_kind_environment", lambda name: calls.append(("start", name)))
     monkeypatch.setattr(kind_env, "export_docker_kubeconfig", lambda name: calls.append(("kubeconfig", name)))
     monkeypatch.setattr(kind_env, "verify_docker_gpu_runtime", lambda: calls.append("gpu-runtime"))
     monkeypatch.setattr(kind_env, "ensure_kind_gpu_support", lambda name: calls.append(("gpu-kind", name)))
+    monkeypatch.setattr(kind_env, "validate_kind_environment", lambda name: calls.append(("validate", name)))
     monkeypatch.setattr(kind_env, "run", lambda args, capture=False: calls.append(tuple(args)))
 
     kind_env.ensure_kind_environment("miniten", gpu=True)
 
     assert "gpu-runtime" in calls
+    assert ("start", "miniten") in calls
     assert ("gpu-kind", "miniten") in calls
+    assert ("validate", "miniten") in calls
 
 
 def test_kind_env_recreates_unusable_existing_cluster(monkeypatch) -> None:
@@ -201,6 +258,7 @@ def test_kind_env_recreates_unusable_existing_cluster(monkeypatch) -> None:
 
     monkeypatch.setattr(kind_env, "require_tool", lambda name: calls.append(("tool", name)))
     monkeypatch.setattr(kind_env, "existing_clusters", lambda: {"miniten"})
+    monkeypatch.setattr(kind_env, "start_kind_environment", lambda name: calls.append(("start", name)))
 
     def fake_export(cluster_name):
         exports["count"] += 1
@@ -213,12 +271,14 @@ def test_kind_env_recreates_unusable_existing_cluster(monkeypatch) -> None:
         return subprocess.CompletedProcess(args, 0, stdout="")
 
     monkeypatch.setattr(kind_env, "export_docker_kubeconfig", fake_export)
+    monkeypatch.setattr(kind_env, "validate_kind_environment", lambda name: calls.append(("validate", name)))
     monkeypatch.setattr(kind_env, "run", fake_run)
 
     kind_env.ensure_kind_environment("miniten")
 
     assert ("kind", "delete", "cluster", "--name", "miniten") in calls
     assert ("kind", "create", "cluster", "--name", "miniten") in calls
+    assert ("start", "miniten") in calls
     assert calls.count(("export", "miniten")) == 2
 
 

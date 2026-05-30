@@ -244,23 +244,18 @@ def test_auth_service_login_rejects_missing_user_or_bad_password(monkeypatch) ->
 
 
 def test_project_service_create_list_get_delete(monkeypatch) -> None:
-    deleted_namespaces = []
     fake = FakeTransaction(
         fetchones=[
             project_row(),
             project_row(role="owner"),
             {"role": "owner"},
             project_row(role="owner"),
+            {"project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765"},
             {"project_id": PROJECT_ID},
         ],
         fetchalls=[[project_row(role="owner")]],
     )
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
-    monkeypatch.setattr(
-        project_service,
-        "delete_project_kubernetes_namespace",
-        lambda namespace: deleted_namespaces.append(namespace),
-    )
 
     created = project_service.create_project(USER_ID, "Personal Models")
     listed = project_service.list_projects(USER_ID)
@@ -271,71 +266,84 @@ def test_project_service_create_list_get_delete(monkeypatch) -> None:
     assert listed["projects"][0]["projectID"] == PROJECT_ID
     assert fetched["role"] == "owner"
     assert deleted == {"deleted": True}
-    assert deleted_namespaces == ["miniten-personal-models"]
+    assert any(
+        params and params.get("k8s_namespace") == "miniten-personal-models"
+        for _, params in fake.cursor.executed
+    )
 
 
-def test_project_delete_keeps_db_row_when_kubernetes_cleanup_fails(monkeypatch) -> None:
+def test_project_delete_queues_cleanup_before_deleting_db_row(monkeypatch) -> None:
     fake = FakeTransaction(
         fetchones=[
             {"role": "owner"},
             project_row(role="owner"),
+            {"project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765"},
+            {"project_id": PROJECT_ID},
         ],
     )
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
 
-    def fail_cleanup(namespace):
-        raise RuntimeError("kubernetes unavailable")
+    deleted = project_service.delete_project(USER_ID, PROJECT_ID)
 
-    monkeypatch.setattr(
-        project_service,
-        "delete_project_kubernetes_namespace",
-        fail_cleanup,
+    assert deleted == {"deleted": True}
+    cleanup_index = next(
+        index
+        for index, (_, params) in enumerate(fake.cursor.executed)
+        if params and params.get("k8s_namespace") == "miniten-personal-models"
     )
-
-    with pytest.raises(RuntimeError):
-        project_service.delete_project(USER_ID, PROJECT_ID)
-
-    assert len(fake.cursor.executed) == 2
+    delete_index = next(
+        index
+        for index, (_, params) in enumerate(fake.cursor.executed)
+        if params == {"project_id": PROJECT_ID}
+    )
+    assert cleanup_index < delete_index
 
 
 def test_project_service_deletes_sole_member_projects(monkeypatch) -> None:
-    deleted_namespaces = []
     fake = FakeTransaction(
-        fetchones=[{"project_id": PROJECT_ID}],
+        fetchones=[
+            {"project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765"},
+            {"project_id": PROJECT_ID},
+        ],
         fetchalls=[[project_row(role="owner")]],
     )
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
-    monkeypatch.setattr(
-        project_service,
-        "delete_project_kubernetes_namespace",
-        lambda namespace: deleted_namespaces.append(namespace),
-    )
 
     deleted = project_service.delete_sole_member_projects_for_user(USER_ID)
 
     assert deleted[0]["projectID"] == PROJECT_ID
-    assert deleted_namespaces == ["miniten-personal-models"]
-
-
-def test_project_service_keeps_sole_member_project_db_when_cleanup_fails(
-    monkeypatch,
-) -> None:
-    fake = FakeTransaction(fetchalls=[[project_row(role="owner")]])
-    monkeypatch.setattr(project_service, "transaction", fake.transaction)
-
-    def fail_cleanup(namespace):
-        raise RuntimeError("kubernetes unavailable")
-
-    monkeypatch.setattr(
-        project_service,
-        "delete_project_kubernetes_namespace",
-        fail_cleanup,
+    assert any(
+        params and params.get("k8s_namespace") == "miniten-personal-models"
+        for _, params in fake.cursor.executed
     )
 
-    with pytest.raises(RuntimeError):
-        project_service.delete_sole_member_projects_for_user(USER_ID)
 
-    assert len(fake.cursor.executed) == 1
+def test_project_service_queues_sole_member_cleanup_before_delete(
+    monkeypatch,
+) -> None:
+    fake = FakeTransaction(
+        fetchones=[
+            {"project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765"},
+            {"project_id": PROJECT_ID},
+        ],
+        fetchalls=[[project_row(role="owner")]],
+    )
+    monkeypatch.setattr(project_service, "transaction", fake.transaction)
+
+    deleted = project_service.delete_sole_member_projects_for_user(USER_ID)
+
+    assert deleted[0]["projectID"] == PROJECT_ID
+    cleanup_index = next(
+        index
+        for index, (_, params) in enumerate(fake.cursor.executed)
+        if params and params.get("k8s_namespace") == "miniten-personal-models"
+    )
+    delete_index = next(
+        index
+        for index, (_, params) in enumerate(fake.cursor.executed)
+        if params == {"project_id": PROJECT_ID}
+    )
+    assert cleanup_index < delete_index
 
 
 def test_project_service_member_lifecycle(monkeypatch) -> None:
@@ -390,11 +398,6 @@ def test_project_service_validation_and_not_found_branches(monkeypatch) -> None:
 
     fake = FakeTransaction(fetchones=[None, {"role": "owner"}, None])
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
-    monkeypatch.setattr(
-        project_service,
-        "delete_project_kubernetes_namespace",
-        lambda namespace: None,
-    )
 
     with pytest.raises(ApiError):
         project_service.get_project(USER_ID, PROJECT_ID)

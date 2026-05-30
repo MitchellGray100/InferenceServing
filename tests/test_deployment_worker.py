@@ -29,8 +29,9 @@ def job_row(
     *,
     attempts: int = 0,
     max_attempts: int = 3,
+    with_lease: bool = False,
 ) -> dict[str, object]:
-    return {
+    row = {
         "deployment_job_id": JOB_ID,
         "project_id": PROJECT_ID,
         "model_deployment_id": MODEL_DEPLOYMENT_ID,
@@ -40,10 +41,19 @@ def job_row(
         "max_attempts": max_attempts,
         "payload": {},
     }
+    if with_lease:
+        row["model_operation_lease_token"] = "11111111-1111-1111-1111-111111111111"
+        row["locked_by"] = "worker-1"
+    return row
 
 
 def test_process_next_job_returns_no_work_when_queue_empty(monkeypatch) -> None:
     monkeypatch.setattr(deployment_worker, "claim_next_job", lambda worker_id: None)
+    monkeypatch.setattr(
+        deployment_worker,
+        "claim_next_project_cleanup_job",
+        lambda worker_id: None,
+    )
 
     result = deployment_worker.process_next_job(FakeClients(), worker_id="worker-1")
 
@@ -67,6 +77,33 @@ def test_process_next_job_claims_and_processes(monkeypatch) -> None:
 
     assert result.processed is True
     assert result.deployment_job_id == JOB_ID
+    assert result.status == "succeeded"
+
+
+def test_process_next_job_claims_project_cleanup_when_no_deployment_job(monkeypatch) -> None:
+    cleanup_job = {
+        "project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765",
+        "project_id": PROJECT_ID,
+        "k8s_namespace": "miniten-personal",
+        "attempts": 0,
+        "max_attempts": 3,
+    }
+    monkeypatch.setattr(deployment_worker, "claim_next_job", lambda worker_id: None)
+    monkeypatch.setattr(
+        deployment_worker,
+        "claim_next_project_cleanup_job",
+        lambda worker_id: cleanup_job,
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "process_claimed_project_cleanup_job",
+        lambda clients, job: "succeeded",
+    )
+
+    result = deployment_worker.process_next_job(FakeClients(), worker_id="worker-1")
+
+    assert result.processed is True
+    assert result.deployment_job_id == cleanup_job["project_cleanup_job_id"]
     assert result.status == "succeeded"
 
 
@@ -258,6 +295,60 @@ def test_process_claimed_job_fails_at_max_attempts(monkeypatch) -> None:
     assert status == "failed"
 
 
+def test_process_claimed_job_does_not_write_after_lease_loss(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(
+        deployment_worker,
+        "fetch_deployment_for_job",
+        lambda job: deployment_row(),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "is_stale_job",
+        lambda job, deployment: False,
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "is_noop_job",
+        lambda job: False,
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "assert_job_lease_owned",
+        lambda job: (_ for _ in ()).throw(
+            deployment_worker.LostModelOperationLease("lost")
+        ),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "mark_job_succeeded",
+        lambda job, deployment: calls.append("success"),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "mark_job_failed_or_retrying",
+        lambda job, exc: calls.append("failure"),
+    )
+
+    status = deployment_worker.process_claimed_job(FakeClients(), job_row())
+
+    assert status == "lease_lost"
+    assert calls == []
+
+
+def test_refresh_job_lease_raises_when_token_no_longer_matches(monkeypatch) -> None:
+    fake = FakeTransaction(fetchone=None)
+    monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
+
+    try:
+        deployment_worker.refresh_job_lease(job_row(with_lease=True))
+    except deployment_worker.LostModelOperationLease:
+        pass
+    else:
+        raise AssertionError("expected LostModelOperationLease")
+
+
 def test_dispatch_job_calls_apply_for_deploy_and_start(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
@@ -418,11 +509,21 @@ def test_mark_job_skipped(monkeypatch) -> None:
     assert fake.cursor.executed[0]["deployment_job_id"] == JOB_ID
 
 
+def test_release_job_lease_uses_fencing_token() -> None:
+    cursor = FakeCursor(fetchone=job_row())
+
+    deployment_worker.release_job_lease_with_cursor(cursor, job_row(with_lease=True))
+
+    assert cursor.executed[0]["model_deployment_id"] == MODEL_DEPLOYMENT_ID
+    assert cursor.executed[0]["deployment_job_id"] == JOB_ID
+    assert cursor.executed[0]["lease_token"] == "11111111-1111-1111-1111-111111111111"
+
+
 def test_failed_stale_job_does_not_overwrite_newer_deployment(monkeypatch) -> None:
     deployment = deployment_row()
     deployment["desired_generation"] = 3
     fake = FakeTransaction(fetchone=deployment)
-    job = job_row(attempts=0, max_attempts=3)
+    job = job_row(attempts=0, max_attempts=3, with_lease=True)
     job["desired_generation"] = 2
 
     monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
@@ -430,7 +531,68 @@ def test_failed_stale_job_does_not_overwrite_newer_deployment(monkeypatch) -> No
     deployment_worker.mark_job_failed_or_retrying(job, RuntimeError("old failure"))
 
     assert fake.cursor.executed[-1]["deployment_job_id"] == JOB_ID
+    assert fake.cursor.executed[-1]["lease_token"] == "11111111-1111-1111-1111-111111111111"
     assert all(params.get("status") != "failed" for params in fake.cursor.executed)
+
+
+def test_project_cleanup_job_deletes_namespace(monkeypatch) -> None:
+    cleanup_job = {
+        "project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765",
+        "project_id": PROJECT_ID,
+        "k8s_namespace": "miniten-personal",
+        "attempts": 0,
+        "max_attempts": 3,
+    }
+    calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
+    monkeypatch.setattr(
+        deployment_worker.k8s_client,
+        "delete_namespace",
+        lambda clients, namespace: calls.append(namespace),
+    )
+    monkeypatch.setattr(
+        deployment_worker,
+        "mark_project_cleanup_job_succeeded",
+        lambda job: calls.append("succeeded"),
+    )
+
+    status = deployment_worker.process_claimed_project_cleanup_job(
+        FakeClients(),
+        cleanup_job,
+    )
+
+    assert status == "succeeded"
+    assert calls == ["miniten-personal", "succeeded"]
+
+
+def test_project_cleanup_job_retries_on_failure(monkeypatch) -> None:
+    cleanup_job = {
+        "project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765",
+        "project_id": PROJECT_ID,
+        "k8s_namespace": "miniten-personal",
+        "attempts": 0,
+        "max_attempts": 3,
+    }
+    calls = []
+    monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
+
+    def delete_namespace(clients, namespace):
+        raise RuntimeError("temporary cluster failure")
+
+    monkeypatch.setattr(deployment_worker.k8s_client, "delete_namespace", delete_namespace)
+    monkeypatch.setattr(
+        deployment_worker,
+        "mark_project_cleanup_job_failed_or_retrying",
+        lambda job, exc: calls.append(str(exc)),
+    )
+
+    status = deployment_worker.process_claimed_project_cleanup_job(
+        FakeClients(),
+        cleanup_job,
+    )
+
+    assert status == "retrying"
+    assert calls == ["temporary cluster failure"]
 
 
 def test_retrying_job_does_not_mark_deployment_failed(monkeypatch) -> None:

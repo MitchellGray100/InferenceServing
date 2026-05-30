@@ -24,6 +24,8 @@ NVIDIA_DEVICE_PLUGIN_URL = (
 NVIDIA_DRIVER_LIBRARY_NAMES = ("libcuda.so.1", "libnvidia-ml.so.1")
 NVIDIA_NODE_DRIVER_LIBRARY_DIR = "/usr/local/nvidia/lib64"
 NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
+KIND_VALIDATION_ATTEMPTS = 12
+KIND_VALIDATION_DELAY_SECONDS = 2.0
 
 
 def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
@@ -38,6 +40,7 @@ def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
     cluster_exists = cluster_name in existing_clusters()
     if cluster_exists:
         print(f"kind cluster already exists: {cluster_name}")
+        start_kind_environment(cluster_name)
     else:
         print(f"Creating kind cluster: {cluster_name}")
         run(["kind", "create", "cluster", "--name", cluster_name])
@@ -56,8 +59,33 @@ def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
         export_docker_kubeconfig(cluster_name)
     if gpu:
         ensure_kind_gpu_support(cluster_name)
-    run(["kubectl", "cluster-info", "--context", f"kind-{cluster_name}"])
-    run(["kubectl", "get", "nodes", "--context", f"kind-{cluster_name}"])
+    validate_kind_environment(cluster_name)
+
+
+def validate_kind_environment(cluster_name: str) -> None:
+    """Wait until the restarted kind API and default RBAC are usable."""
+    context = f"kind-{cluster_name}"
+    run_with_retries(
+        ["kubectl", "get", "nodes", "--context", context],
+        attempts=KIND_VALIDATION_ATTEMPTS,
+        delay_seconds=KIND_VALIDATION_DELAY_SECONDS,
+    )
+    run_with_retries(
+        [
+            "kubectl",
+            "auth",
+            "can-i",
+            "list",
+            "services",
+            "-n",
+            "kube-system",
+            "--context",
+            context,
+        ],
+        attempts=KIND_VALIDATION_ATTEMPTS,
+        delay_seconds=KIND_VALIDATION_DELAY_SECONDS,
+        accepted_stdout={"yes"},
+    )
 
 
 def delete_kind_environment(cluster_name: str) -> None:
@@ -73,6 +101,68 @@ def delete_kind_environment(cluster_name: str) -> None:
     if LOCAL_KUBECONFIG.exists():
         LOCAL_KUBECONFIG.unlink()
         print(f"Removed generated kubeconfig: {LOCAL_KUBECONFIG}")
+
+
+def start_kind_environment(cluster_name: str) -> None:
+    """Start an existing local kind node without deleting cached cluster data."""
+    require_tool("docker")
+    node_name = kind_control_plane_container_name(cluster_name)
+    if not docker_container_exists(node_name):
+        print(f"kind control-plane container does not exist: {node_name}")
+        return
+    if docker_container_running(node_name):
+        print(f"kind control-plane container already running: {node_name}")
+        return
+    print(f"Starting kind control-plane container: {node_name}")
+    run(["docker", "start", node_name])
+
+
+def stop_kind_environment(cluster_name: str) -> None:
+    """Stop an existing local kind node while preserving PVC/cache data."""
+    if shutil.which("docker") is None:
+        print("Docker CLI is not installed; skipping kind stop.")
+        return
+
+    node_name = kind_control_plane_container_name(cluster_name)
+    if not docker_container_exists(node_name):
+        print(f"kind control-plane container does not exist: {node_name}")
+        return
+    if not docker_container_running(node_name):
+        print(f"kind control-plane container already stopped: {node_name}")
+        return
+    print(f"Stopping kind control-plane container: {node_name}")
+    run(["docker", "stop", node_name])
+
+
+def kind_control_plane_container_name(cluster_name: str) -> str:
+    """Return the Docker container name for a single-node kind cluster."""
+    return f"{cluster_name}-control-plane"
+
+
+def docker_container_exists(container_name: str) -> bool:
+    """Return whether Docker knows about a container by name."""
+    result = subprocess.run(
+        ["docker", "inspect", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def docker_container_running(container_name: str) -> bool:
+    """Return whether a Docker container is currently running."""
+    result = run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            container_name,
+        ],
+        capture=True,
+    )
+    return result.stdout.strip().lower() == "true"
 
 
 def export_docker_kubeconfig(cluster_name: str) -> None:
@@ -326,10 +416,39 @@ def run(args: list[str], *, capture: bool = False) -> subprocess.CompletedProces
     return result
 
 
+def run_with_retries(
+    args: list[str],
+    *,
+    attempts: int,
+    delay_seconds: float,
+    accepted_stdout: set[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command until it succeeds, for kind restart readiness checks."""
+    last_error: RuntimeError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            result = run(args, capture=accepted_stdout is not None)
+            if accepted_stdout is None:
+                return result
+            if result.stdout.strip().lower() in accepted_stdout:
+                return result
+            last_error = RuntimeError(
+                f"{' '.join(args)} returned unexpected output: {result.stdout.strip()}"
+            )
+        except RuntimeError as exc:
+            last_error = exc
+
+        if attempt < attempts:
+            time.sleep(delay_seconds)
+
+    assert last_error is not None
+    raise last_error
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="Manage MiniTen's local kind cluster.")
-    parser.add_argument("command", choices=["ensure", "delete"])
+    parser.add_argument("command", choices=["ensure", "start", "stop", "delete"])
     parser.add_argument(
         "--cluster-name",
         default=os.getenv("MINITEN_KIND_CLUSTER_NAME", DEFAULT_CLUSTER_NAME),
@@ -349,6 +468,10 @@ def main() -> int:
     try:
         if args.command == "ensure":
             ensure_kind_environment(args.cluster_name, gpu=args.gpu)
+        elif args.command == "start":
+            start_kind_environment(args.cluster_name)
+        elif args.command == "stop":
+            stop_kind_environment(args.cluster_name)
         else:
             delete_kind_environment(args.cluster_name)
     except RuntimeError as exc:

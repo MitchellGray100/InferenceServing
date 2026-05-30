@@ -84,7 +84,6 @@ def run_real_vllm_smoke_test(
             "POST",
             f"/v1/projects/{project_id}/models",
             token=token,
-            headers={"Idempotency-Key": f"deploy-{suffix}"},
             json={
                 "name": model_name,
                 "model_id": model_id,
@@ -170,7 +169,6 @@ def run_real_vllm_smoke_test(
             "DELETE",
             f"/v1/projects/{project_id}/models/{model_deployment_id}",
             token=token,
-            headers={"Idempotency-Key": f"delete-{suffix}"},
             expected_status=202,
         )
         wait_for_deployment_job(

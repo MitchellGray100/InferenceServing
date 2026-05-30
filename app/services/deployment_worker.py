@@ -27,9 +27,6 @@ from app.k8s import deployment_manager
 queries = load_queries()
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 logger = logging.getLogger(__name__)
-# TODO: The MVP should run exactly one deployment worker process/pod. Before
-# scaling workers horizontally, add per-model serialization plus heartbeat/lease
-# renewal so slow Kubernetes operations cannot overlap on the same deployment.
 
 SUCCESS_EVENT_TYPES = {
     "deploy_model": "model_running",
@@ -59,6 +56,7 @@ RUNNING_STATUSES = {
 }
 STOPPED_STATUSES = {"stop_model": "stopped"}
 SKIPPED_STATUS = "skipped"
+LEASE_LOST_STATUS = "lease_lost"
 
 FAILURE_CATEGORIES = {
     "imagepullbackoff": "image_pull",
@@ -96,6 +94,10 @@ class JobResult:
     status: str | None = None
 
 
+class LostModelOperationLease(RuntimeError):
+    """Raised when a worker no longer owns a model operation lease."""
+
+
 def default_worker_id() -> str:
     """Return a stable-ish worker identifier for DB locks and debugging."""
     return f"{socket.gethostname()}:{os.getpid()}"
@@ -107,7 +109,24 @@ def claim_next_job(worker_id: str) -> dict[str, Any] | None:
         with conn.cursor() as cur:
             cur.execute(
                 queries.get("claim_next_deployment_job"),
-                {"locked_by": worker_id},
+                {
+                    "locked_by": worker_id,
+                    "lease_seconds": Config.WORKER_LEASE_SECONDS,
+                },
+            )
+            return cur.fetchone()
+
+
+def claim_next_project_cleanup_job(worker_id: str) -> dict[str, Any] | None:
+    """Atomically claim the next queued/retrying project cleanup job."""
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("claim_next_project_cleanup_job"),
+                {
+                    "locked_by": worker_id,
+                    "lease_seconds": Config.WORKER_LEASE_SECONDS,
+                },
             )
             return cur.fetchone()
 
@@ -121,25 +140,62 @@ def process_next_job(
     active_worker_id = worker_id or default_worker_id()
     job = claim_next_job(active_worker_id)
 
-    if job is None:
+    if job is not None:
+        logger.info(
+            "Processing deployment job %s of type %s.",
+            job["deployment_job_id"],
+            job["job_type"],
+        )
+        status = process_claimed_job(clients, job)
+        logger.info(
+            "Finished deployment job %s with status %s.",
+            job["deployment_job_id"],
+            status,
+        )
+        return JobResult(
+            processed=True,
+            deployment_job_id=str(job["deployment_job_id"]),
+            status=status,
+        )
+
+    cleanup_job = claim_next_project_cleanup_job(active_worker_id)
+    if cleanup_job is None:
         return JobResult(processed=False)
 
     logger.info(
-        "Processing deployment job %s of type %s.",
-        job["deployment_job_id"],
-        job["job_type"],
+        "Processing project cleanup job %s for namespace %s.",
+        cleanup_job["project_cleanup_job_id"],
+        cleanup_job["k8s_namespace"],
     )
-    status = process_claimed_job(clients, job)
+    status = process_claimed_project_cleanup_job(clients, cleanup_job)
     logger.info(
-        "Finished deployment job %s with status %s.",
-        job["deployment_job_id"],
+        "Finished project cleanup job %s with status %s.",
+        cleanup_job["project_cleanup_job_id"],
         status,
     )
     return JobResult(
         processed=True,
-        deployment_job_id=str(job["deployment_job_id"]),
+        deployment_job_id=str(cleanup_job["project_cleanup_job_id"]),
         status=status,
     )
+
+
+def process_claimed_project_cleanup_job(clients: Any, job: dict[str, Any]) -> str:
+    """Delete a project namespace for a claimed project cleanup job."""
+    try:
+        if Config.WORKER_DRY_RUN:
+            logger.info(
+                "Dry-run worker skipped project namespace cleanup job_id=%s namespace=%s.",
+                job["project_cleanup_job_id"],
+                job["k8s_namespace"],
+            )
+        else:
+            k8s_client.delete_namespace(clients, job["k8s_namespace"])
+        mark_project_cleanup_job_succeeded(job)
+        return "succeeded"
+    except Exception as exc:
+        mark_project_cleanup_job_failed_or_retrying(job, exc)
+        return "failed" if should_project_cleanup_fail_permanently(job) else "retrying"
 
 
 def process_claimed_job(
@@ -161,11 +217,27 @@ def process_claimed_job(
             mark_job_skipped(job)
             return SKIPPED_STATUS
 
-        dispatch_job(clients, job, deployment)
+        with maintained_model_operation_lease(job):
+            assert_job_lease_owned(job)
+            dispatch_job(clients, job, deployment)
+            assert_job_lease_owned(job)
         mark_job_succeeded(job, deployment)
         return "succeeded"
+    except LostModelOperationLease:
+        logger.warning(
+            "Deployment job %s lost its model operation lease; leaving final state for the current lease owner.",
+            job.get("deployment_job_id"),
+        )
+        return LEASE_LOST_STATUS
     except Exception as exc:
-        mark_job_failed_or_retrying(job, exc)
+        try:
+            mark_job_failed_or_retrying(job, exc)
+        except LostModelOperationLease:
+            logger.warning(
+                "Deployment job %s lost its model operation lease before failure could be recorded.",
+                job.get("deployment_job_id"),
+            )
+            return LEASE_LOST_STATUS
         return "failed" if should_fail_permanently(job) else "retrying"
 
 
@@ -308,12 +380,132 @@ def dispatch_job(
     raise RuntimeError(f"unsupported deployment job type: {job_type}")
 
 
+def maintained_model_operation_lease(job: dict[str, Any]) -> Any:
+    """Return a context manager that heartbeats a model operation lease."""
+    return ModelOperationLeaseMaintenance(job)
+
+
+class ModelOperationLeaseMaintenance:
+    """Refresh a model operation lease while a worker performs Kubernetes work."""
+
+    def __init__(self, job: dict[str, Any]) -> None:
+        self.job = job
+        self.stop_event = threading.Event()
+        self.lease_lost_event = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def __enter__(self) -> "ModelOperationLeaseMaintenance":
+        if not job_has_model_operation_lease(self.job):
+            return self
+
+        refresh_job_lease(self.job)
+        self.thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"model-operation-lease-{self.job['deployment_job_id']}",
+            daemon=True,
+        )
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args: Any) -> bool:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+        if self.lease_lost_event.is_set() and args[0] is None:
+            raise LostModelOperationLease("model operation lease was lost")
+        return False
+
+    def _heartbeat_loop(self) -> None:
+        interval = max(1.0, float(Config.WORKER_LEASE_HEARTBEAT_SECONDS))
+        while not self.stop_event.wait(interval):
+            try:
+                refresh_job_lease(self.job)
+            except LostModelOperationLease:
+                self.lease_lost_event.set()
+                logger.warning(
+                    "Lost model operation lease during heartbeat deployment_job_id=%s.",
+                    self.job.get("deployment_job_id"),
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "Failed to heartbeat model operation lease deployment_job_id=%s.",
+                    self.job.get("deployment_job_id"),
+                )
+
+
+def job_has_model_operation_lease(job: dict[str, Any]) -> bool:
+    """Return whether a claimed job carries a fenced model operation lease."""
+    return bool(job.get("model_deployment_id") and job.get("model_operation_lease_token"))
+
+
+def model_operation_lease_params(job: dict[str, Any]) -> dict[str, Any]:
+    """Return SQL parameters identifying a claimed model operation lease."""
+    return {
+        "model_deployment_id": job["model_deployment_id"],
+        "deployment_job_id": job["deployment_job_id"],
+        "lease_token": job["model_operation_lease_token"],
+        "locked_by": job.get("locked_by") or default_worker_id(),
+        "lease_seconds": Config.WORKER_LEASE_SECONDS,
+    }
+
+
+def refresh_job_lease(job: dict[str, Any]) -> None:
+    """Extend a model operation lease or raise if this worker no longer owns it."""
+    if not job_has_model_operation_lease(job):
+        return
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("heartbeat_model_operation_lease"),
+                model_operation_lease_params(job),
+            )
+            if cur.fetchone() is None:
+                raise LostModelOperationLease("model operation lease is no longer owned")
+
+
+def assert_job_lease_owned(job: dict[str, Any]) -> None:
+    """Raise when a fenced model operation lease is missing or no longer current."""
+    if not job_has_model_operation_lease(job):
+        return
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            assert_job_lease_owned_with_cursor(cur, job)
+
+
+def assert_job_lease_owned_with_cursor(cur: Any, job: dict[str, Any]) -> None:
+    """Verify model lease ownership inside an existing transaction."""
+    if not job_has_model_operation_lease(job):
+        return
+
+    cur.execute(
+        queries.get("verify_model_operation_lease"),
+        model_operation_lease_params(job),
+    )
+    if cur.fetchone() is None:
+        raise LostModelOperationLease("model operation lease is no longer owned")
+
+
+def release_job_lease_with_cursor(cur: Any, job: dict[str, Any]) -> None:
+    """Release a model operation lease inside the caller's transaction."""
+    if not job_has_model_operation_lease(job):
+        return
+
+    cur.execute(
+        queries.get("release_model_operation_lease"),
+        model_operation_lease_params(job),
+    )
+
+
 def mark_job_succeeded(job: dict[str, Any], deployment: dict[str, Any]) -> None:
     """Persist deployment/event/job success state after Kubernetes work."""
     job_type = job["job_type"]
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            assert_job_lease_owned_with_cursor(cur, job)
             if job_type == "delete_model":
                 cur.execute(
                     queries.get("mark_model_deployment_deleted"),
@@ -350,6 +542,7 @@ def mark_job_succeeded(job: dict[str, Any], deployment: dict[str, Any]) -> None:
                 queries.get("mark_deployment_job_succeeded"),
                 {"deployment_job_id": job["deployment_job_id"]},
             )
+            release_job_lease_with_cursor(cur, job)
 
 
 def infer_synced_status(deployment: dict[str, Any]) -> str:
@@ -365,10 +558,12 @@ def mark_job_skipped(job: dict[str, Any]) -> None:
     """Mark a stale job skipped without mutating Kubernetes or deployment state."""
     with transaction() as conn:
         with conn.cursor() as cur:
+            assert_job_lease_owned_with_cursor(cur, job)
             cur.execute(
                 queries.get("mark_deployment_job_skipped"),
                 {"deployment_job_id": job["deployment_job_id"]},
             )
+            release_job_lease_with_cursor(cur, job)
 
 
 def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
@@ -383,6 +578,7 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
 
     with transaction() as conn:
         with conn.cursor() as cur:
+            assert_job_lease_owned_with_cursor(cur, job)
             deployment = None
 
             if job.get("model_deployment_id") is not None:
@@ -392,6 +588,7 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
                         queries.get("mark_deployment_job_skipped"),
                         {"deployment_job_id": job["deployment_job_id"]},
                     )
+                    release_job_lease_with_cursor(cur, job)
                     return
 
                 deployment = (
@@ -429,6 +626,7 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
                     ),
                 },
             )
+            release_job_lease_with_cursor(cur, job)
 
 
 def fetch_deployment_for_job_with_cursor(
@@ -449,6 +647,42 @@ def fetch_deployment_for_job_with_cursor(
 def should_fail_permanently(job: dict[str, Any]) -> bool:
     """Return whether the next failed attempt should exhaust the job."""
     return int(job["attempts"]) + 1 >= int(job["max_attempts"])
+
+
+def should_project_cleanup_fail_permanently(job: dict[str, Any]) -> bool:
+    """Return whether the next failed project cleanup attempt should exhaust the job."""
+    return int(job["attempts"]) + 1 >= int(job["max_attempts"])
+
+
+def mark_project_cleanup_job_succeeded(job: dict[str, Any]) -> None:
+    """Mark a project namespace cleanup job as succeeded."""
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("mark_project_cleanup_job_succeeded"),
+                {"project_cleanup_job_id": job["project_cleanup_job_id"]},
+            )
+
+
+def mark_project_cleanup_job_failed_or_retrying(
+    job: dict[str, Any],
+    exc: Exception,
+) -> None:
+    """Record retry/failure state for a project namespace cleanup job."""
+    query_name = (
+        "mark_project_cleanup_job_failed"
+        if should_project_cleanup_fail_permanently(job)
+        else "mark_project_cleanup_job_retrying"
+    )
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get(query_name),
+                {
+                    "project_cleanup_job_id": job["project_cleanup_job_id"],
+                    "last_error": truncate_error(str(exc) or exc.__class__.__name__),
+                },
+            )
 
 
 def classify_failure(exc: Exception) -> dict[str, str]:

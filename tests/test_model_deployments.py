@@ -57,18 +57,6 @@ def auth_headers(app):
     return {"Authorization": f"Bearer {token}"}
 
 
-def idempotency_headers(auth_headers, key: str = "test-idempotency-key"):
-    return {**auth_headers, "Idempotency-Key": key}
-
-
-def bypass_idempotency(monkeypatch):
-    monkeypatch.setattr(
-        "app.routes.model_deployments.idempotency_service."
-        "run_idempotent_control_plane_request",
-        lambda **kwargs: kwargs["action"](),
-    )
-
-
 def model_deployment_response(status: str = "deploying") -> dict[str, object]:
     return {
         "modelDeploymentID": MODEL_DEPLOYMENT_ID,
@@ -130,8 +118,6 @@ def command_response(job_type: str = "deploy_model") -> dict[str, object]:
 
 
 def test_create_model_deployment_route(monkeypatch, client, auth_headers) -> None:
-    bypass_idempotency(monkeypatch)
-
     def create_model_deployment(user_id, project_id, data):
         assert user_id == USER_ID
         assert project_id == PROJECT_ID
@@ -147,7 +133,7 @@ def test_create_model_deployment_route(monkeypatch, client, auth_headers) -> Non
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models",
         json={"name": "qwen-small-prod", "model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
-        headers=idempotency_headers(auth_headers, "create-model"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 201
@@ -380,8 +366,6 @@ def test_lifecycle_command_routes(
     method_name,
     job_type,
 ) -> None:
-    bypass_idempotency(monkeypatch)
-
     monkeypatch.setattr(
         f"app.routes.model_deployments.model_deployment_service.{method_name}",
         lambda user_id, project_id, model_deployment_id: command_response(job_type),
@@ -389,7 +373,7 @@ def test_lifecycle_command_routes(
 
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/{path_suffix}",
-        headers=idempotency_headers(auth_headers, path_suffix),
+        headers=auth_headers,
     )
 
     assert response.status_code == 202
@@ -397,8 +381,6 @@ def test_lifecycle_command_routes(
 
 
 def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None:
-    bypass_idempotency(monkeypatch)
-
     def scale_model_deployment(user_id, project_id, model_deployment_id, replicas):
         assert replicas == 3
         return command_response("scale_model")
@@ -412,7 +394,7 @@ def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/scale",
         json={"replicas": 3},
-        headers=idempotency_headers(auth_headers, "scale-model"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 202
@@ -420,8 +402,6 @@ def test_scale_model_deployment_route(monkeypatch, client, auth_headers) -> None
 
 
 def test_update_model_deployment_settings_route(monkeypatch, client, auth_headers) -> None:
-    bypass_idempotency(monkeypatch)
-
     def update_settings(user_id, project_id, model_deployment_id, data):
         assert data["resources"]["gpu_count"] == 1
         return command_response("update_model")
@@ -435,7 +415,7 @@ def test_update_model_deployment_settings_route(monkeypatch, client, auth_header
     response = client.patch(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}",
         json={"resources": {"gpu_count": 1}},
-        headers=idempotency_headers(auth_headers, "update-model"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 202
@@ -443,7 +423,6 @@ def test_update_model_deployment_settings_route(monkeypatch, client, auth_header
 
 
 def test_sync_model_deployment_status_route(monkeypatch, client, auth_headers) -> None:
-    bypass_idempotency(monkeypatch)
     monkeypatch.setattr(
         "app.routes.model_deployments.model_deployment_service."
         "sync_model_deployment_status",
@@ -452,7 +431,7 @@ def test_sync_model_deployment_status_route(monkeypatch, client, auth_headers) -
 
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}/sync",
-        headers=idempotency_headers(auth_headers, "sync-model"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 202
@@ -460,8 +439,6 @@ def test_sync_model_deployment_status_route(monkeypatch, client, auth_headers) -
 
 
 def test_delete_model_deployment_route(monkeypatch, client, auth_headers) -> None:
-    bypass_idempotency(monkeypatch)
-
     monkeypatch.setattr(
         "app.routes.model_deployments.model_deployment_service."
         "delete_model_deployment",
@@ -470,7 +447,7 @@ def test_delete_model_deployment_route(monkeypatch, client, auth_headers) -> Non
 
     response = client.delete(
         f"/v1/projects/{PROJECT_ID}/models/{MODEL_DEPLOYMENT_ID}",
-        headers=idempotency_headers(auth_headers, "delete-model"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 202
@@ -484,18 +461,25 @@ def test_model_deployment_routes_require_auth(client) -> None:
     assert response.get_json()["error"]["type"] == "unauthorized"
 
 
-def test_model_deployment_command_routes_require_idempotency_key(
+def test_model_deployment_create_route_accepts_request_without_replay_key(
+    monkeypatch,
     client,
     auth_headers,
 ) -> None:
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service."
+        "create_model_deployment",
+        lambda user_id, project_id, data: command_response(),
+    )
+
     response = client.post(
         f"/v1/projects/{PROJECT_ID}/models",
         json={"name": "qwen-small-prod", "model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
         headers=auth_headers,
     )
 
-    assert response.status_code == 400
-    assert response.get_json()["error"]["type"] == "missing_idempotency_key"
+    assert response.status_code == 201
+    assert response.get_json() == command_response()
 
 
 def test_validate_deployment_spec_applies_defaults(app) -> None:

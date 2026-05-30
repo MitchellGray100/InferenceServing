@@ -272,7 +272,7 @@ def _create_or_patch(create: Any, patch: Any) -> Any:
         return create()
     except Exception as exc:
         # 409 means the resource already exists. Patching makes worker retries
-        # idempotent for the desired manifest.
+        # safe to repeat for the desired manifest.
         if _status_code(exc) == 409:
             logger.debug("Kubernetes create conflicted; patching existing resource.")
             return patch()

@@ -1204,9 +1204,7 @@ These endpoints are for creating, updating, starting, stopping, deleting, and in
 
 They do not send inference prompts to models. Inference happens through `/v1/chat/completions`.
 
-Side-effecting model control-plane endpoints require an `Idempotency-Key`
 header. The same key with the same request replays the original response, while
-the same key with a different request returns `idempotency_key_conflict`.
 
 User-controlled deployment settings are intentionally narrow in the MVP.
 Clients provide the model name, Hugging Face model ID, replica/autoscaling
@@ -1303,10 +1301,8 @@ unknown fields are rejected
 1. Verify user is project owner or member.
 2. Validate deployment name.
 3. Ensure name is unique within project.
-4. Check or create the idempotency record from the required Idempotency-Key.
 5. Insert model_deployments row with status = deploying and desired_generation = 1.
 6. Insert deployment_jobs row with job_type = deploy_model and desired_generation = 1.
-7. Store the response in idempotency_keys when applicable.
 8. Return the deployment object and queued deployment job.
 ```
 
@@ -1679,7 +1675,6 @@ owner, member
 3. Validate requested replica count.
 4. Update desired replicas in model_deployments and increment desired_generation.
 5. Insert deployment_jobs row with job_type = scale_model and desired_generation.
-6. Store/replay idempotency response for the required Idempotency-Key.
 7. Return the deployment object and queued deployment job.
 ```
 
@@ -1725,7 +1720,6 @@ The Deployment Worker patches Deployment and HPA resources.
 
 ```http
 PATCH /v1/projects/{projectID}/models/{modelDeploymentID}
-Idempotency-Key: <required>
 ```
 
 ### Purpose
@@ -1770,7 +1764,6 @@ the managed CPU or GPU vLLM image from `gpu_count`, increments
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/sync
-Idempotency-Key: <required>
 ```
 
 Queues a `sync_status` job. The worker reads live Kubernetes Deployment,
@@ -1823,7 +1816,6 @@ Optional:
 2. Find model by projectID + modelDeploymentID.
 3. Update status to deploying and increment desired_generation.
 4. Insert deployment_jobs row with job_type = start_model and desired_generation.
-5. Store/replay idempotency response for the required Idempotency-Key.
 6. Return the deployment object and queued deployment job.
 ```
 
@@ -1895,7 +1887,6 @@ owner, member
 2. Find model by projectID + modelDeploymentID.
 3. Update status = stopped and increment desired_generation.
 4. Insert deployment_jobs row with job_type = stop_model and desired_generation.
-5. Store/replay idempotency response for the required Idempotency-Key.
 6. Return the deployment object and queued deployment job.
 ```
 
@@ -1971,7 +1962,6 @@ owner, member
 2. Find model by projectID + modelDeploymentID.
 3. Update status = deploying and increment desired_generation.
 4. Insert deployment_jobs row with job_type = hard_restart_model and desired_generation.
-5. Store/replay idempotency response for the required Idempotency-Key.
 6. Return the deployment object and queued deployment job.
 ```
 
@@ -2034,7 +2024,6 @@ owner, member
 2. Find model by projectID + modelDeploymentID.
 3. Set status = deleting and increment desired_generation.
 4. Insert deployment_jobs row with job_type = delete_model and desired_generation.
-5. Store/replay idempotency response for the required Idempotency-Key.
 6. Return the deployment object and queued deployment job.
 ```
 

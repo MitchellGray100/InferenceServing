@@ -176,25 +176,6 @@ CREATE TABLE model_events (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Client-provided idempotency keys for retry-safe control-plane operations.
-CREATE TABLE idempotency_keys (
-  idempotency_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-
-  idempotency_key TEXT NOT NULL,
-  request_hash TEXT NOT NULL,
-
-  response_status INTEGER,
-  response_body JSONB,
-
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at TIMESTAMP NOT NULL,
-
-  UNIQUE(project_id, user_id, idempotency_key)
-);
-
 -- Durable queue and command history for model lifecycle work.
 CREATE TABLE deployment_jobs (
   deployment_job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -227,6 +208,53 @@ CREATE TABLE deployment_jobs (
 
   desired_generation INTEGER NOT NULL DEFAULT 1,
   payload JSONB NOT NULL DEFAULT '{}',
+
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
+
+  locked_by TEXT,
+  locked_at TIMESTAMP,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-model operation leases let multiple deployment workers run safely while
+-- still serializing lifecycle commands for one model deployment.
+CREATE TABLE model_operation_locks (
+  model_deployment_id UUID PRIMARY KEY
+    REFERENCES model_deployments(model_deployment_id)
+    ON DELETE CASCADE,
+
+  deployment_job_id UUID NOT NULL
+    REFERENCES deployment_jobs(deployment_job_id)
+    ON DELETE CASCADE,
+
+  locked_by TEXT NOT NULL,
+  lease_token UUID NOT NULL DEFAULT gen_random_uuid(),
+
+  locked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  heartbeat_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  lease_expires_at TIMESTAMP NOT NULL
+);
+
+-- Durable cleanup queue for project-owned Kubernetes namespaces. These rows do
+-- not reference projects because project metadata is deleted before namespace
+-- cleanup completes.
+CREATE TABLE project_cleanup_jobs (
+  project_cleanup_job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  project_id UUID NOT NULL,
+  k8s_namespace TEXT NOT NULL,
+
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+    'queued',
+    'running',
+    'succeeded',
+    'failed',
+    'retrying'
+  )),
 
   attempts INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER NOT NULL DEFAULT 3,
@@ -283,12 +311,6 @@ ON model_events(project_id);
 CREATE INDEX idx_model_events_created_at
 ON model_events(created_at);
 
-CREATE INDEX idx_idempotency_keys_project_user
-ON idempotency_keys(project_id, user_id);
-
-CREATE INDEX idx_idempotency_keys_expires_at
-ON idempotency_keys(expires_at);
-
 CREATE INDEX idx_deployment_jobs_status
 ON deployment_jobs(status);
 
@@ -303,3 +325,18 @@ ON deployment_jobs(locked_at);
 
 CREATE INDEX idx_deployment_jobs_created_at
 ON deployment_jobs(created_at);
+
+CREATE INDEX idx_model_operation_locks_deployment_job_id
+ON model_operation_locks(deployment_job_id);
+
+CREATE INDEX idx_model_operation_locks_lease_expires_at
+ON model_operation_locks(lease_expires_at);
+
+CREATE INDEX idx_project_cleanup_jobs_status
+ON project_cleanup_jobs(status);
+
+CREATE INDEX idx_project_cleanup_jobs_project_id
+ON project_cleanup_jobs(project_id);
+
+CREATE INDEX idx_project_cleanup_jobs_locked_at
+ON project_cleanup_jobs(locked_at);

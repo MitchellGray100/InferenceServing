@@ -133,6 +133,39 @@ def test_auth_token_version_and_hard_restart_event_schema() -> None:
     assert "'model_hard_restarted'" in migration
 
 
+def test_model_operation_locks_schema_and_migration() -> None:
+    initial_schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+    migration = (
+        migrate.migrations_dir() / "006_model_operation_locks.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE TABLE model_operation_locks" in initial_schema
+    assert "lease_token UUID NOT NULL DEFAULT gen_random_uuid()" in initial_schema
+    assert "lease_expires_at TIMESTAMP NOT NULL" in initial_schema
+    assert "CREATE TABLE IF NOT EXISTS model_operation_locks" in migration
+    assert "idx_model_operation_locks_lease_expires_at" in migration
+
+
+def test_project_cleanup_jobs_schema_and_migration() -> None:
+    initial_schema = (migrate.migrations_dir() / "001_initial_schema.sql").read_text(
+        encoding="utf-8"
+    )
+    migration = (
+        migrate.migrations_dir() / "007_project_cleanup_jobs.sql"
+    ).read_text(encoding="utf-8")
+    queries = (
+        migrate.project_root() / "app" / "db" / "queries" / "project_cleanup_jobs.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE TABLE project_cleanup_jobs" in initial_schema
+    assert "project_cleanup_job_id UUID PRIMARY KEY" in initial_schema
+    assert "CREATE TABLE IF NOT EXISTS project_cleanup_jobs" in migration
+    assert "idx_project_cleanup_jobs_status" in migration
+    assert "-- name: claim_next_project_cleanup_job" in queries
+
+
 def test_get_applied_migrations_creates_table_and_returns_mapping() -> None:
     conn = FakeMigrationConnection(fetchall=[("001.sql", "abc")])
 

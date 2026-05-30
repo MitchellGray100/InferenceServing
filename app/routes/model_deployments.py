@@ -9,7 +9,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from app.security.tokens import current_user_id, require_user_auth
-from app.services import idempotency_service, model_deployment_service
+from app.services import model_deployment_service
 from app.utils.validation import require_field, require_json_object
 
 
@@ -24,23 +24,12 @@ def create_model_deployment(project_id: str) -> tuple[object, int]:
     """Create model deployment metadata and enqueue deploy work."""
     data = require_json_object(request.get_json(silent=True))
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
+    response = model_deployment_service.create_model_deployment(
         user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body=data,
-        action=lambda: (
-            model_deployment_service.create_model_deployment(
-                user_id=user_id,
-                project_id=project_id,
-                data=data,
-            ),
-            201,
-        ),
+        project_id=project_id,
+        data=data,
     )
-    return jsonify(response), status
+    return jsonify(response), 201
 
 
 @bp.get("/<project_id>/models")
@@ -78,24 +67,13 @@ def update_model_deployment_settings(
     """Update deployment settings and enqueue Kubernetes reapply work."""
     data = require_json_object(request.get_json(silent=True))
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
+    response = model_deployment_service.update_model_deployment_settings(
         user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body=data,
-        action=lambda: (
-            model_deployment_service.update_model_deployment_settings(
-                user_id=user_id,
-                project_id=project_id,
-                model_deployment_id=model_deployment_id,
-                data=data,
-            ),
-            202,
-        ),
+        project_id=project_id,
+        model_deployment_id=model_deployment_id,
+        data=data,
     )
-    return jsonify(response), status
+    return jsonify(response), 202
 
 
 @bp.get("/<project_id>/models/<model_deployment_id>/jobs")
@@ -153,23 +131,12 @@ def start_model_deployment(
     in the deployment worker after the job row is committed.
     """
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
-        user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body={},
-        action=lambda: (
-            model_deployment_service.start_model_deployment(
-                user_id,
-                project_id,
-                model_deployment_id,
-            ),
-            202,
-        ),
+    response = model_deployment_service.start_model_deployment(
+        user_id,
+        project_id,
+        model_deployment_id,
     )
-    return jsonify(response), status
+    return jsonify(response), 202
 
 
 @bp.post("/<project_id>/models/<model_deployment_id>/stop")
@@ -184,23 +151,12 @@ def stop_model_deployment(
     has already scaled the deployment down.
     """
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
-        user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body={},
-        action=lambda: (
-            model_deployment_service.stop_model_deployment(
-                user_id,
-                project_id,
-                model_deployment_id,
-            ),
-            202,
-        ),
+    response = model_deployment_service.stop_model_deployment(
+        user_id,
+        project_id,
+        model_deployment_id,
     )
-    return jsonify(response), status
+    return jsonify(response), 202
 
 
 @bp.post("/<project_id>/models/<model_deployment_id>/hard-restart")
@@ -211,23 +167,12 @@ def hard_restart_model_deployment(
 ) -> tuple[object, int]:
     """Force-delete runtime resources and enqueue deployment recreation."""
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
-        user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body={},
-        action=lambda: (
-            model_deployment_service.hard_restart_model_deployment(
-                user_id,
-                project_id,
-                model_deployment_id,
-            ),
-            202,
-        ),
+    response = model_deployment_service.hard_restart_model_deployment(
+        user_id,
+        project_id,
+        model_deployment_id,
     )
-    return jsonify(response), status
+    return jsonify(response), 202
 
 
 @bp.post("/<project_id>/models/<model_deployment_id>/scale")
@@ -243,24 +188,13 @@ def scale_model_deployment(
     """
     data = require_json_object(request.get_json(silent=True))
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
+    response = model_deployment_service.scale_model_deployment(
         user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body=data,
-        action=lambda: (
-            model_deployment_service.scale_model_deployment(
-                user_id=user_id,
-                project_id=project_id,
-                model_deployment_id=model_deployment_id,
-                replicas=require_field(data, "replicas"),
-            ),
-            202,
-        ),
+        project_id=project_id,
+        model_deployment_id=model_deployment_id,
+        replicas=require_field(data, "replicas"),
     )
-    return jsonify(response), status
+    return jsonify(response), 202
 
 
 @bp.post("/<project_id>/models/<model_deployment_id>/sync")
@@ -271,23 +205,12 @@ def sync_model_deployment_status(
 ) -> tuple[object, int]:
     """Enqueue status reconciliation from live Kubernetes state."""
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
-        user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body={},
-        action=lambda: (
-            model_deployment_service.sync_model_deployment_status(
-                user_id,
-                project_id,
-                model_deployment_id,
-            ),
-            202,
-        ),
+    response = model_deployment_service.sync_model_deployment_status(
+        user_id,
+        project_id,
+        model_deployment_id,
     )
-    return jsonify(response), status
+    return jsonify(response), 202
 
 
 @bp.delete("/<project_id>/models/<model_deployment_id>")
@@ -302,20 +225,9 @@ def delete_model_deployment(
     before the database row is finally marked deleted.
     """
     user_id = current_user_id()
-    response, status = idempotency_service.run_idempotent_control_plane_request(
-        project_id=project_id,
-        user_id=user_id,
-        idempotency_key=request.headers.get("Idempotency-Key"),
-        method=request.method,
-        path=request.path,
-        body={},
-        action=lambda: (
-            model_deployment_service.delete_model_deployment(
-                user_id,
-                project_id,
-                model_deployment_id,
-            ),
-            202,
-        ),
+    response = model_deployment_service.delete_model_deployment(
+        user_id,
+        project_id,
+        model_deployment_id,
     )
-    return jsonify(response), status
+    return jsonify(response), 202

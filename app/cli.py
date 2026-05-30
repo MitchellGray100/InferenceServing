@@ -2,7 +2,7 @@
 
 The CLI intentionally talks to the public HTTP API instead of importing service
 functions. That keeps local/operator workflows on the same auth, validation,
-idempotency, and response paths as dashboard users and external automation.
+and response paths as dashboard users and external automation.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import getpass
 import json
 import os
 import sys
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -55,16 +54,15 @@ TOP_LEVEL_HELP = """command reference:
       [--dtype <dtype>] [--max-model-len <tokens>]
       [--autoscaling-enabled {true,false}] [--min-replicas <n>]
       [--max-replicas <n>] [--target-cpu-utilization <percent>]
-      [--json <json-object>] [--idempotency-key <key>]
+      [--json <json-object>]
   models list <project-id>
   models get <project-id> <model-deployment-id>
-  models update <project-id> <model-deployment-id> [model settings options]
-      [--json <json-object>] [--idempotency-key <key>]
-  models start <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models stop <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models sync <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models scale <project-id> <model-deployment-id> <replicas> [--idempotency-key <key>]
-  models delete <project-id> <model-deployment-id> [--idempotency-key <key>]
+  models update <project-id> <model-deployment-id> [model settings options] [--json <json-object>]
+  models start <project-id> <model-deployment-id>
+  models stop <project-id> <model-deployment-id>
+  models sync <project-id> <model-deployment-id>
+  models scale <project-id> <model-deployment-id> <replicas>
+  models delete <project-id> <model-deployment-id>
   models jobs <project-id> <model-deployment-id>
   models status <project-id> <model-deployment-id>
   models logs <project-id> <model-name> [--tail <lines>]
@@ -141,14 +139,11 @@ class ApiClient:
         query: dict[str, Any] | None = None,
         auth: bool = True,
         project_api_key: str | None = None,
-        idempotency_key: str | None = None,
     ) -> Any:
         """Call the MiniTen API and return a parsed JSON response."""
         headers = {"Accept": "application/json"}
         if json_body is not None:
             headers["Content-Type"] = "application/json"
-        if idempotency_key:
-            headers["Idempotency-Key"] = idempotency_key
         if project_api_key:
             headers["Authorization"] = f"Bearer {project_api_key}"
         elif auth:
@@ -264,11 +259,6 @@ def prompt_password(args: argparse.Namespace) -> str:
     return getpass.getpass("Password: ")
 
 
-def idempotency_key(args: argparse.Namespace, action: str) -> str:
-    """Return caller-provided idempotency key or generate a unique one."""
-    return args.idempotency_key or f"cli-{action}-{uuid.uuid4()}"
-
-
 def add_json_arg(parser: argparse.ArgumentParser) -> None:
     """Add a raw JSON request body option."""
     parser.add_argument("--json", dest="json_text", help="Raw JSON object body.")
@@ -285,11 +275,6 @@ def parse_json_arg(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CliError("--json must be a JSON object.")
     return value
-
-
-def add_idempotency_arg(parser: argparse.ArgumentParser) -> None:
-    """Add idempotency key option for control-plane commands."""
-    parser.add_argument("--idempotency-key", help="Idempotency key for this command.")
 
 
 def add_model_settings_args(parser: argparse.ArgumentParser) -> None:
@@ -524,7 +509,6 @@ def model_deploy(args: argparse.Namespace, _state: CliState, client: ApiClient) 
             "POST",
             f"/v1/projects/{args.project_id}/models",
             json_body=model_settings_body(args),
-            idempotency_key=idempotency_key(args, "deploy"),
         )
     )
 
@@ -548,7 +532,6 @@ def model_update(args: argparse.Namespace, _state: CliState, client: ApiClient) 
             "PATCH",
             f"/v1/projects/{args.project_id}/models/{args.model_id}",
             json_body=model_settings_body(args),
-            idempotency_key=idempotency_key(args, "update"),
         )
     )
 
@@ -566,7 +549,6 @@ def model_command(
             "POST",
             f"/v1/projects/{args.project_id}/models/{args.model_id}/{command}",
             json_body=body,
-            idempotency_key=idempotency_key(args, command),
         )
     )
 
@@ -577,7 +559,6 @@ def model_delete(args: argparse.Namespace, _state: CliState, client: ApiClient) 
         client.request(
             "DELETE",
             f"/v1/projects/{args.project_id}/models/{args.model_id}",
-            idempotency_key=idempotency_key(args, "delete"),
         )
     )
 
@@ -860,7 +841,6 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--model-id", required=True)
     add_model_settings_args(deploy)
     add_json_arg(deploy)
-    add_idempotency_arg(deploy)
     deploy.set_defaults(handler=model_deploy)
     list_models = models_sub.add_parser("list")
     list_models.add_argument("project_id")
@@ -874,13 +854,11 @@ def build_parser() -> argparse.ArgumentParser:
     update_model.add_argument("model_id")
     add_model_settings_args(update_model)
     add_json_arg(update_model)
-    add_idempotency_arg(update_model)
     update_model.set_defaults(handler=model_update)
     for command in ["start", "stop", "hard-restart", "sync"]:
         command_parser = models_sub.add_parser(command)
         command_parser.add_argument("project_id")
         command_parser.add_argument("model_id")
-        add_idempotency_arg(command_parser)
         command_parser.set_defaults(
             handler=lambda args, state, client, cmd=command: model_command(
                 args,
@@ -893,14 +871,12 @@ def build_parser() -> argparse.ArgumentParser:
     scale.add_argument("project_id")
     scale.add_argument("model_id")
     scale.add_argument("replicas", type=int)
-    add_idempotency_arg(scale)
     scale.set_defaults(
         handler=lambda args, state, client: model_command(args, state, client, "scale")
     )
     delete_model = models_sub.add_parser("delete")
     delete_model.add_argument("project_id")
     delete_model.add_argument("model_id")
-    add_idempotency_arg(delete_model)
     delete_model.set_defaults(handler=model_delete)
     jobs = models_sub.add_parser("jobs")
     jobs.add_argument("project_id")

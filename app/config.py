@@ -76,6 +76,10 @@ class Config:
     WORKER_POLL_INTERVAL_SECONDS = float(
         os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2.0")
     )
+    WORKER_LEASE_SECONDS = float(os.getenv("WORKER_LEASE_SECONDS", "120"))
+    WORKER_LEASE_HEARTBEAT_SECONDS = float(
+        os.getenv("WORKER_LEASE_HEARTBEAT_SECONDS", "30")
+    )
     WORKER_READINESS_TIMEOUT_SECONDS = float(
         os.getenv("WORKER_READINESS_TIMEOUT_SECONDS", "600")
     )

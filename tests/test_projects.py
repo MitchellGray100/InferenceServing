@@ -6,6 +6,7 @@ import pytest
 
 from app import create_app
 from app.security.tokens import create_access_token
+from app.services import project_service
 from app.services.project_service import (
     ensure_not_last_owner,
     require_role,
@@ -246,3 +247,93 @@ def test_ensure_not_last_owner_rejects_last_owner() -> None:
         ensure_not_last_owner(Cursor(), "a2fc41b7-862e-4060-b466-2376f29227bb")
 
     assert error.value.message == "A project must have at least one owner."
+
+
+def test_delete_project_queues_namespace_cleanup_before_deleting_metadata(monkeypatch) -> None:
+    cursor = FakeProjectCursor(
+        fetchones=[
+            {"role": "owner"},
+            {
+                "project_id": "a2fc41b7-862e-4060-b466-2376f29227bb",
+                "name": "Personal Models",
+                "slug": "personal-models",
+                "k8s_namespace": "miniten-personal-models",
+                "created_at": datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+                "role": "owner",
+            },
+            {
+                "project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765",
+            },
+            {
+                "project_id": "a2fc41b7-862e-4060-b466-2376f29227bb",
+                "k8s_namespace": "miniten-personal-models",
+            },
+        ],
+    )
+    monkeypatch.setattr(project_service, "transaction", FakeProjectTransaction(cursor))
+
+    response = project_service.delete_project(
+        "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e",
+        "a2fc41b7-862e-4060-b466-2376f29227bb",
+    )
+
+    assert response == {"deleted": True}
+    cleanup_index = next(
+        index
+        for index, params in enumerate(cursor.executed)
+        if params.get("k8s_namespace") == "miniten-personal-models"
+    )
+    delete_index = next(
+        index
+        for index, params in enumerate(cursor.executed)
+        if list(params) == ["project_id"]
+    )
+    assert cleanup_index < delete_index
+
+
+class FakeProjectCursor:
+    def __init__(self, fetchones):
+        self.fetchones = list(fetchones)
+        self.executed = []
+
+    def execute(self, _sql, params):
+        self.executed.append(params)
+
+    def fetchone(self):
+        return self.fetchones.pop(0) if self.fetchones else None
+
+    def fetchall(self):
+        return []
+
+
+class FakeProjectConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return FakeProjectCursorContext(self._cursor)
+
+
+class FakeProjectCursorContext:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def __enter__(self):
+        return self.cursor
+
+    def __exit__(self, *args):
+        return False
+
+
+class FakeProjectTransaction:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        return FakeProjectConnection(self.cursor)
+
+    def __exit__(self, *args):
+        return False

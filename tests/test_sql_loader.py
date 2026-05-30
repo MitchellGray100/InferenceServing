@@ -10,6 +10,9 @@ def test_load_queries_finds_expected_query_names() -> None:
 
     assert "create_user" in store.names()
     assert "claim_next_deployment_job" in store.names()
+    assert "claim_next_project_cleanup_job" in store.names()
+    assert "heartbeat_model_operation_lease" in store.names()
+    assert "verify_model_operation_lease" in store.names()
     assert "get_model_inference_metrics" in store.names()
 
 

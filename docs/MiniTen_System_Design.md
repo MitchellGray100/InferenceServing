@@ -99,7 +99,6 @@ The `model` field uses the MiniTen deployment name, not the raw Hugging Face mod
 - Postgres
 - Explicit SQL schema files
 - Postgres-backed deployment job queue
-- Postgres-backed idempotency key tracking
 
 ## Frontend / Dashboard
 
@@ -220,7 +219,6 @@ app/services/model_deployment_service.py
 app/services/inference_service.py
 app/services/deployment_worker.py
 app/services/reconciler.py
-app/services/idempotency_service.py
 ```
 
 Recommended support modules:
@@ -268,7 +266,6 @@ model_deployments
 api_keys
 inference_requests
 model_events
-idempotency_keys
 deployment_jobs
 ```
 
@@ -400,10 +397,10 @@ Model lifecycle operations can be slow. Deploying a model requires creating Kube
 
 MiniTen uses a Postgres-backed `deployment_jobs` table so the API can return quickly and retain a durable history of deployment commands.
 
-MVP deployment assumption: MiniTen runs exactly one Deployment Worker
-process/pod. Multiple workers should wait until per-model serialization and
-worker heartbeat/lease renewal are implemented, because slow Kubernetes
-operations can otherwise overlap with stale lock recovery.
+MiniTen can run multiple Deployment Worker processes/pods. Workers claim queued
+jobs from Postgres and use fenced per-model operation leases with heartbeats so
+slow Kubernetes operations for one model cannot overlap with a stale worker
+that wakes up later. Different models can still be processed in parallel.
 
 Local development starts the worker during `make setup-env` with
 `WORKER_DRY_RUN=true`. In dry-run mode the worker still claims
@@ -670,7 +667,6 @@ Validate user and project permissions
   ↓
 Validate deployment name is unique in project
   ↓
-Check or create idempotency key
   ↓
 Create model_deployments row
   ↓
@@ -710,7 +706,6 @@ Relevant tables:
 ```text
 model_deployments
 deployment_jobs
-idempotency_keys
 model_events
 ```
 
@@ -979,15 +974,12 @@ If the local or cloud cluster does not support a compatible shared volume mode, 
 
 ---
 
-## 11. Idempotency Flow
 
-Idempotency prevents duplicate side effects from retried control-plane requests.
 
 Example:
 
 ```http
 POST /projects/proj_123/models
-Idempotency-Key: deploy-qwen-small-prod-001
 ```
 
 First request:
@@ -995,9 +987,7 @@ First request:
 ```text
 Request arrives
   ↓
-No existing idempotency key
   ↓
-Create idempotency_keys row
   ↓
 Run operation
   ↓
@@ -1011,7 +1001,6 @@ Retry with same key and same request body:
 ```text
 Request arrives
   ↓
-Existing idempotency key found
   ↓
 Request hash matches
   ↓
@@ -1025,7 +1014,6 @@ Retry with same key and different body:
 ```text
 Request arrives
   ↓
-Existing idempotency key found
   ↓
 Request hash differs
   ↓
@@ -1042,11 +1030,9 @@ scale model
 delete model
 ```
 
-Idempotency prevents duplicate jobs from client retries. Desired generations
 prevent older, already-queued jobs from applying after a newer command has been
 requested for the same model deployment.
 
-API key creation does not use idempotency in the MVP because replaying the
 response would require storing the raw API key.
 
 Not used for:

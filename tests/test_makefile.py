@@ -21,3 +21,33 @@ def test_clean_env_stops_local_api_before_compose_cleanup() -> None:
 
     assert "scripts/stop_local_api.py" in clean_env
     assert clean_env.index("scripts/stop_local_api.py") < clean_env.index("docker compose down")
+
+
+def test_clean_env_stops_kind_without_deleting_cache() -> None:
+    """Environment cleanup should stop kind but preserve the cluster cache."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    clean_env = makefile.split("clean-env:", 1)[1].split("\n\n", 1)[0]
+
+    assert "$(MAKE) stop-kind" in clean_env
+    assert "clean-kind" not in clean_env
+
+
+def test_setup_env_starts_existing_kind_before_ensure() -> None:
+    """Setup should restart a stopped kind node before cluster validation."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    setup_env = makefile.split("setup-env: install", 1)[1].split("\n\n", 1)[0]
+
+    assert "$(MAKE) start-kind" in setup_env
+    assert setup_env.index("$(MAKE) start-kind") < setup_env.index("scripts/kind_env.py ensure")
+
+
+def test_local_api_smoke_forces_dry_run_worker() -> None:
+    """API smoke tests should not inherit a real Kubernetes worker from prior smoke tests."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    test_local_apis = makefile.split("test-local-apis:", 1)[1].split("\n\n", 1)[0]
+
+    assert "WORKER_DRY_RUN=true" in test_local_apis
+    assert "docker compose up -d --build --force-recreate worker" in test_local_apis
+    assert test_local_apis.index("WORKER_DRY_RUN=true") < test_local_apis.index(
+        "scripts/smoke_test_local_api.py"
+    )

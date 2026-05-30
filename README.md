@@ -97,15 +97,17 @@ To reopen or restart the dashboard after setup:
 make open-dashboard
 ```
 
-To stop the background API/dashboard and remove local Compose state:
+To stop the background API/dashboard, remove local Compose state, and stop the
+local kind node while preserving its PVC/cache data:
 
 ```bash
 make clean-env
 ```
 
-`make clean-env` does not delete the kind cluster. That preserves cached pod
-images such as vLLM. Use `make clean-kind` or `make clean-all` when you want to
-delete the cluster too.
+`make clean-env` stops the kind node container instead of deleting it. That
+frees Docker Desktop memory while preserving cached pod images and PVC data such
+as Hugging Face model downloads. Use `make clean-kind` or `make clean-all` when
+you want to delete the cluster and its cache.
 
 ## Manual Local Workflow
 
@@ -136,6 +138,8 @@ make setup-env
 make setup-web
 make open-dashboard
 make clean-env
+make start-kind
+make stop-kind
 make clean-kind
 make clean-all
 make migrate
@@ -143,6 +147,7 @@ make run-api
 make run-worker
 make run-worker-dry-run
 make start-worker-real-k8s
+make test
 make test-local-apis
 make test-local-k8s
 make test-local-vllm
@@ -166,14 +171,17 @@ What the important targets do:
 | `make run-api` | Runs Flask API/dashboard in the foreground. |
 | `make run-worker` | Runs the deployment worker in the foreground using real Kubernetes. |
 | `make run-worker-dry-run` | Runs the worker without mutating Kubernetes. |
-| `make clean-env` | Stops local API, removes Compose services/volumes, clears setup marker. |
+| `make clean-env` | Stops local API, removes Compose services/volumes, stops kind, clears setup marker. |
+| `make start-kind` | Starts an existing local kind node without deleting PVC/cache data. |
+| `make stop-kind` | Stops the local kind node without deleting PVC/cache data. |
 | `make clean-kind` | Deletes the local kind cluster. |
 | `make clean-all` | Runs `clean-env` and `clean-kind`. |
+| `make test` | Runs the Python unit test suite. |
 | `make test-local-apis` | Runs API smoke tests against a running local API. |
 | `make test-local-k8s` | Tests real Kubernetes resource creation/deletion with a lightweight smoke worker. |
 | `make test-local-vllm` | Deploys a real CPU vLLM pod and calls chat completions. |
 | `make test-local-vllm-gpu` | Runs the GPU vLLM smoke path when Kubernetes exposes `nvidia.com/gpu`. |
-| `make tests` | Runs the Python test suite. |
+| `make tests` | Runs `make test`, `make test-local-apis`, `make test-local-k8s`, and `make test-local-vllm`. |
 | `make lint` | Runs Ruff. |
 
 ## Web Dashboard Workflow
@@ -374,17 +382,17 @@ command reference:
       [--dtype <dtype>] [--max-model-len <tokens>]
       [--autoscaling-enabled {true,false}] [--min-replicas <n>]
       [--max-replicas <n>] [--target-cpu-utilization <percent>]
-      [--json <json-object>] [--idempotency-key <key>]
+      [--json <json-object>]
   models list <project-id>
   models get <project-id> <model-deployment-id>
   models update <project-id> <model-deployment-id> [model settings options]
-      [--json <json-object>] [--idempotency-key <key>]
-  models start <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models stop <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models hard-restart <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models sync <project-id> <model-deployment-id> [--idempotency-key <key>]
-  models scale <project-id> <model-deployment-id> <replicas> [--idempotency-key <key>]
-  models delete <project-id> <model-deployment-id> [--idempotency-key <key>]
+      [--json <json-object>]
+  models start <project-id> <model-deployment-id>
+  models stop <project-id> <model-deployment-id>
+  models hard-restart <project-id> <model-deployment-id>
+  models sync <project-id> <model-deployment-id>
+  models scale <project-id> <model-deployment-id> <replicas>
+  models delete <project-id> <model-deployment-id>
   models jobs <project-id> <model-deployment-id>
   models status <project-id> <model-deployment-id>
   models logs <project-id> <model-name> [--tail <lines>]
@@ -677,6 +685,28 @@ make clean-kind
 ```
 
 ## Local Smoke Tests
+
+Run the unit tests only:
+
+```bash
+make test
+```
+
+Run the full non-GPU local test suite:
+
+```bash
+make setup-env
+make run-api
+```
+
+Then, in another terminal:
+
+```bash
+make tests
+```
+
+`make tests` runs the unit tests plus API, real Kubernetes, and CPU vLLM smoke
+tests. It does not run the GPU smoke target.
 
 API smoke test:
 

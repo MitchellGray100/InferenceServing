@@ -106,7 +106,7 @@ def delete_model_deployment(
     )
 
     # Delete traffic/scaling resources before deleting pods. Each delete helper
-    # treats 404 as success, which keeps retries idempotent.
+    # treats 404 as success, which keeps retries safe.
     k8s_client.delete_hpa(clients, namespace, deployment["k8s_hpa_name"])
     k8s_client.delete_service(clients, namespace, deployment["k8s_service_name"])
     k8s_client.delete_deployment(

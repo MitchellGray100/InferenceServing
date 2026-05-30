@@ -160,7 +160,6 @@ def run_smoke_tests(base_url: str) -> None:
         "POST",
         f"/v1/projects/{project_id}/models",
         token=owner_token,
-        headers={"Idempotency-Key": f"deploy-{suffix}"},
         json={
             "name": model_name,
             "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
@@ -214,7 +213,6 @@ def run_smoke_tests(base_url: str) -> None:
         "POST",
         f"/v1/projects/{project_id}/models/{model_deployment_id}/start",
         token=owner_token,
-        headers={"Idempotency-Key": f"start-{suffix}"},
         expected_status=202,
     )
     wait_for_deployment_job(
@@ -236,7 +234,6 @@ def run_smoke_tests(base_url: str) -> None:
         "POST",
         f"/v1/projects/{project_id}/models/{model_deployment_id}/stop",
         token=owner_token,
-        headers={"Idempotency-Key": f"stop-{suffix}"},
         expected_status=202,
     )
     wait_for_deployment_job(
@@ -257,7 +254,6 @@ def run_smoke_tests(base_url: str) -> None:
         "POST",
         f"/v1/projects/{project_id}/models/{model_deployment_id}/scale",
         token=owner_token,
-        headers={"Idempotency-Key": f"scale-{suffix}"},
         json={"replicas": 2},
         expected_status=202,
     )
@@ -272,7 +268,6 @@ def run_smoke_tests(base_url: str) -> None:
         "DELETE",
         f"/v1/projects/{project_id}/models/{model_deployment_id}",
         token=owner_token,
-        headers={"Idempotency-Key": f"delete-model-{suffix}"},
         expected_status=202,
     )
     wait_for_deployment_job(
@@ -288,8 +283,15 @@ def run_smoke_tests(base_url: str) -> None:
         f"/v1/projects/{project_id}/api-keys/{api_key_id}",
         token=owner_token,
     )
-    client.request("POST", "/v1/auth/logout", token=owner_token)
     client.request("DELETE", f"/v1/projects/{project_id}", token=owner_token)
+
+    client.request("POST", "/v1/auth/logout", token=owner_token)
+    owner_login = client.request(
+        "POST",
+        "/v1/auth/login",
+        json={"email": owner_email, "password": PASSWORD},
+    )
+    owner_token = owner_login["access_token"]
     client.request("DELETE", "/v1/users/me", token=owner_token)
 
     member_login = client.request(

@@ -20,7 +20,6 @@ model_deployments
 api_keys
 inference_requests
 model_events
-idempotency_keys
 deployment_jobs
 ```
 
@@ -37,10 +36,8 @@ users
                     └── inference_requests
 
 users
-  └── idempotency_keys
 
 projects
-  └── idempotency_keys
 
 model_deployments
   └── deployment_jobs
@@ -57,7 +54,6 @@ Important design rules:
 - Raw API keys are never stored.
 - Request prompts and model responses are not stored.
 - Kubernetes state is mirrored into application status fields, but Kubernetes remains the source of truth for live pod/replica state.
-- Idempotency keys prevent duplicate side effects from retried control-plane requests.
 - Deployment jobs make model lifecycle operations asynchronous and retryable.
 
 ---
@@ -613,53 +609,43 @@ model_deleted
 
 ---
 
-# 8. `idempotency_keys`
+
+# 8. `project_cleanup_jobs`
 
 ## Purpose
 
-Stores client-provided idempotency keys for control-plane requests.
+Stores asynchronous cleanup work for project-owned Kubernetes namespaces.
 
-This table prevents duplicate side effects when clients retry requests because of timeouts, network errors, refreshes, or double-clicks.
-
-This is especially important for operations that create or modify infrastructure, such as:
-
-```text
-deploy model
-start model
-stop model
-scale model
-delete model
-```
-
-This table answers:
-
-> Has this user already submitted this exact control-plane operation?
-
-Normal inference requests are not idempotent in the MVP. A retry of `/v1/chat/completions` may produce a new model response, so idempotency is mainly for dashboard, CLI, and control-plane operations.
+Project metadata is deleted from Postgres immediately, but namespace cleanup is
+performed by the deployment worker so slow or temporarily unavailable
+Kubernetes APIs do not block user/account deletion requests.
 
 ## Table Definition
 
 ```sql
-CREATE TABLE idempotency_keys (
-  idempotency_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE project_cleanup_jobs (
+  project_cleanup_job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  project_id UUID NOT NULL,
+  k8s_namespace TEXT NOT NULL,
 
-  -- Client-provided key from the Idempotency-Key header
-  idempotency_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+    'queued',
+    'running',
+    'succeeded',
+    'failed',
+    'retrying'
+  )),
 
-  -- Hash of method + path + normalized body + project/user scope
-  request_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
 
-  -- Stored response from the first successful handling of this key
-  response_status INTEGER,
-  response_body JSONB,
+  locked_by TEXT,
+  locked_at TIMESTAMP,
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at TIMESTAMP NOT NULL,
-
-  UNIQUE(project_id, user_id, idempotency_key)
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -667,213 +653,27 @@ CREATE TABLE idempotency_keys (
 
 | Column | Type | Required | Purpose |
 |---|---:|---:|---|
-| `idempotency_key_id` | `UUID` | Yes | Primary key for the idempotency record. |
-| `project_id` | `UUID` | Yes | Project where the request was made. |
-| `user_id` | `UUID` | Yes | User who made the request. |
-| `idempotency_key` | `TEXT` | Yes | Client-provided key from the `Idempotency-Key` header. |
-| `request_hash` | `TEXT` | Yes | Hash of the original request. Used to detect conflicting retries. |
-| `response_status` | `INTEGER` | No | HTTP status code returned by the first handled request. |
-| `response_body` | `JSONB` | No | Response body returned by the first handled request. |
-| `created_at` | `TIMESTAMP` | Yes | Time the idempotency key was created. |
-| `expires_at` | `TIMESTAMP` | Yes | Time after which the key can be deleted. |
-
-## Unique Constraint
-
-```sql
-UNIQUE(project_id, user_id, idempotency_key)
-```
-
-This means a user cannot reuse the same idempotency key for two different operations inside the same project.
-
-The same key string may appear in a different project or for a different user, but within a single project/user scope, it must uniquely identify one logical operation.
-
-## Request Header
-
-Clients provide idempotency keys with this header:
-
-```http
-Idempotency-Key: deploy-qwen-small-prod-001
-```
-
-Model lifecycle command endpoints require this header in the MVP.
-
-Recommended client behavior:
-
-```text
-Use a unique key per logical operation.
-Reuse the same key when retrying the same operation.
-Do not reuse the same key for a different request body.
-```
-
-## Request Hash
-
-The `request_hash` should be calculated from stable request data.
-
-Recommended hash input:
-
-```text
-HTTP method
-request path
-normalized JSON body
-project_id
-user_id
-```
-
-Example conceptual input:
-
-```text
-POST:/projects/proj_123/models:{"name":"qwen-small-prod","model":"Qwen/Qwen2.5-0.5B-Instruct"}:proj_123:usr_123
-```
-
-Hash with SHA-256 or HMAC-SHA256:
-
-```text
-request_hash = sha256(method + path + normalized_body + project_id + user_id)
-```
-
-HMAC-SHA256 with a server-side secret is stronger, but plain SHA-256 is enough for detecting mismatched retries.
-
-## Behavior
-
-### First Request
-
-When a request arrives with a new idempotency key:
-
-```text
-Request arrives
-  ↓
-No existing idempotency key
-  ↓
-Create idempotency_keys row
-  ↓
-Run operation
-  ↓
-Store response status/body
-  ↓
-Return response
-```
-
-### Retry With Same Request
-
-When a request arrives with the same idempotency key and same request hash:
-
-```text
-Request arrives
-  ↓
-Existing idempotency key found
-  ↓
-Request hash matches
-  ↓
-Return stored response
-  ↓
-Do not run operation again
-```
-
-### Retry With Different Request Body
-
-If the same key is reused with a different request hash, return a conflict error.
-
-Recommended status code:
-
-```text
-409 Conflict
-```
-
-Example response:
-
-```json
-{
-  "error": {
-    "type": "idempotency_key_conflict",
-    "message": "This Idempotency-Key was already used with a different request."
-  }
-}
-```
-
-## Example Usage
-
-### Deploy Model
-
-```http
-POST /projects/proj_123/models
-Idempotency-Key: deploy-qwen-small-prod-001
-```
-
-If the user retries this request, MiniTen should not create duplicate Kubernetes resources or duplicate deployment jobs.
-
-### Stop Model
-
-```http
-POST /projects/proj_123/models/qwen-small-prod/stop
-Idempotency-Key: stop-qwen-small-prod-001
-```
-
-If the user retries this request, MiniTen should not enqueue multiple stop jobs unnecessarily.
-
-### Scale Model
-
-```http
-POST /projects/proj_123/models/qwen-small-prod/scale
-Idempotency-Key: scale-qwen-small-prod-to-3-001
-```
-
-Body:
-
-```json
-{
-  "replicas": 3
-}
-```
-
-Retries should return the same response instead of repeatedly issuing scale operations.
-
-### API Key Creation
-
-API key creation does not use idempotency in the MVP because replay storage
-would persist the raw API key in `idempotency_keys.response_body`. API key
-creation is instead protected by unique key names, unique key hashes, and
-server-side retry on generated key hash collision.
-
-## Where This Table Is Used
-
-This table is primarily used by control-plane services:
-
-```text
-Model Deployments Service
-Project Service, optional
-Project Members Service, optional
-```
-
-It is not used for normal inference requests in the MVP.
-
-## Expiration
-
-Idempotency keys should not be stored forever.
-
-MVP recommendation:
-
-```text
-Expire after 24 hours.
-```
-
-Cleanup query:
-
-```sql
-DELETE FROM idempotency_keys
-WHERE expires_at < NOW();
-```
+| `project_cleanup_job_id` | `UUID` | Yes | Cleanup job identifier. |
+| `project_id` | `UUID` | Yes | Deleted project identifier, retained for audit/debugging. |
+| `k8s_namespace` | `TEXT` | Yes | Namespace the worker should delete. |
+| `status` | `TEXT` | Yes | Queue state. |
+| `attempts` | `INTEGER` | Yes | Number of failed cleanup attempts. |
+| `max_attempts` | `INTEGER` | Yes | Maximum failed attempts before terminal failure. |
+| `last_error` | `TEXT` | No | Most recent cleanup error. |
+| `locked_by` | `TEXT` | No | Worker currently processing this cleanup job. |
+| `locked_at` | `TIMESTAMP` | No | Time the current worker claim began. |
+| `created_at` | `TIMESTAMP` | Yes | Creation time. |
+| `updated_at` | `TIMESTAMP` | Yes | Last status change time. |
 
 ## Important Notes
 
-- Use idempotency for model lifecycle operations with side effects.
-- Do not use idempotency for normal model inference requests in the MVP.
-- Store the original response so retries can receive the same result.
-- Return `409 Conflict` if the same key is reused with a different request.
-- This table works with the real MVP `deployment_jobs` table to prevent duplicate async jobs.
-
+- This table intentionally does not reference `projects` because project rows
+  are deleted before namespace cleanup completes.
+- The worker retries failed namespace deletion using the stored namespace name.
+- Deleting a Kubernetes namespace removes model Deployments, Services, HPAs,
+  PVCs, and Secrets inside that project namespace.
 
 ---
-
 # 9. `deployment_jobs`
 
 ## Purpose
@@ -884,9 +684,9 @@ This table lets MiniTen return quickly from slow control-plane requests while a 
 
 It is also the durable record of deployment commands that were requested, attempted, retried, completed, or failed.
 
-MVP deployment assumption: run exactly one Deployment Worker process/pod.
-Multiple workers are deferred until per-model serialization and
-heartbeat/lease renewal are implemented.
+Deployment workers can run concurrently. Model lifecycle jobs use a fenced
+per-model operation lease so only one worker may mutate a given deployment at a
+time, while unrelated model jobs can be processed in parallel.
 
 This is useful because model operations can take a long time:
 
@@ -1184,23 +984,18 @@ attempts >= max_attempts
   → update model_deployments.status if needed
 ```
 
-## Relationship to Idempotency
 
-`deployment_jobs` should work together with `idempotency_keys` and
 `model_deployments.desired_generation`.
 
 Recommended deploy flow:
 
 ```text
-Client sends deploy request with Idempotency-Key
   ↓
-Model Deployments Service checks idempotency_keys
   ↓
 If new, creates model_deployments row
   ↓
 Creates deployment_jobs row
   ↓
-Stores response in idempotency_keys
   ↓
 Deployment Worker processes the job asynchronously
 ```
@@ -1288,11 +1083,7 @@ ON model_events(project_id);
 CREATE INDEX idx_model_events_created_at
 ON model_events(created_at);
 
-CREATE INDEX idx_idempotency_keys_project_user
-ON idempotency_keys(project_id, user_id);
 
-CREATE INDEX idx_idempotency_keys_expires_at
-ON idempotency_keys(expires_at);
 
 CREATE INDEX idx_deployment_jobs_status
 ON deployment_jobs(status);
@@ -1380,20 +1171,15 @@ ORDER BY created_at DESC;
 ```
 
 
-## Check idempotency key
 
 ```sql
 SELECT *
-FROM idempotency_keys
 WHERE project_id = $1
   AND user_id = $2
-  AND idempotency_key = $3;
 ```
 
-## Cleanup expired idempotency keys
 
 ```sql
-DELETE FROM idempotency_keys
 WHERE expires_at < NOW();
 ```
 
@@ -1597,13 +1383,10 @@ CREATE TABLE model_events (
 );
 
 
-CREATE TABLE idempotency_keys (
-  idempotency_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
 
-  idempotency_key TEXT NOT NULL,
   request_hash TEXT NOT NULL,
 
   response_status INTEGER,
@@ -1612,7 +1395,6 @@ CREATE TABLE idempotency_keys (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   expires_at TIMESTAMP NOT NULL,
 
-  UNIQUE(project_id, user_id, idempotency_key)
 );
 
 CREATE TABLE deployment_jobs (
@@ -1704,7 +1486,6 @@ This schema supports the MiniTen MVP features:
 - inference request tracking
 - deployment event history
 - dashboard metrics
-- idempotent control-plane operations
 - asynchronous deployment jobs
 - OpenAI-compatible request routing
 

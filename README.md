@@ -308,6 +308,9 @@ The notebook-style workflow uses the project API key, points the SDK at
 `http://127.0.0.1:8000/v1`, and sends requests to the MiniTen model deployment
 name.
 
+Example notebooks are available in `examples/minitendemo.ipynb` and
+`examples/minitendemo_streaming.ipynb`.
+
 ![MiniTen Jupyter streaming demo](docs/images/JupyterStreamingDemo.gif)
 
 ### Account

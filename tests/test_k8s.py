@@ -10,6 +10,7 @@ from app.k8s.deployment_manager import (
     inspect_model_readiness,
     read_model_logs,
     scale_model_deployment,
+    stop_model_deployment,
 )
 from app.k8s.manifests import (
     HF_CACHE_MOUNT_PATH,
@@ -360,6 +361,36 @@ def test_deployment_manager_scale() -> None:
     assert apps.scale_body == {"spec": {"replicas": 3}}
 
 
+def test_deployment_manager_stop_deletes_hpa_before_scaling_to_zero() -> None:
+    apps = FakeApps(deployment_status=ready_deployment_status(available_replicas=0))
+    hpa = FakeHpa()
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(pods=[]),
+        apps=apps,
+        autoscaling=hpa,
+    )
+
+    stop_model_deployment(clients, deployment_payload(autoscaling_enabled=True))
+
+    assert hpa.calls == ["delete_namespaced_horizontal_pod_autoscaler"]
+    assert apps.scale_body == {"spec": {"replicas": 0}}
+
+
+def test_deployment_manager_stop_without_autoscaling_only_scales_to_zero() -> None:
+    apps = FakeApps(deployment_status=ready_deployment_status(available_replicas=0))
+    hpa = FakeHpa()
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(pods=[]),
+        apps=apps,
+        autoscaling=hpa,
+    )
+
+    stop_model_deployment(clients, deployment_payload(autoscaling_enabled=False))
+
+    assert hpa.calls == []
+    assert apps.scale_body == {"spec": {"replicas": 0}}
+
+
 def test_inspect_model_readiness_ready() -> None:
     clients = k8s_client.KubernetesClients(
         core=FakeCore(pods=[ready_pod()]),
@@ -510,7 +541,7 @@ class FakeCore:
     ):
         self.conflict_on_create = conflict_on_create
         self.not_found_on_delete = not_found_on_delete
-        self.pods = pods or [ready_pod()]
+        self.pods = [ready_pod()] if pods is None else pods
         self.fail_log_read = fail_log_read
         self.calls: list[str] = []
         self.log_tail_lines: list[int] = []

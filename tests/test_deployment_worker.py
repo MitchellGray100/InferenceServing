@@ -321,19 +321,24 @@ def test_dispatch_job_sync_status_sets_synced_status(monkeypatch) -> None:
     assert deployment["_synced_status"] == "running"
 
 
-def test_dispatch_job_calls_scale_for_stop_and_scale(monkeypatch) -> None:
+def test_dispatch_job_calls_stop_and_scale(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(deployment_worker.Config, "WORKER_DRY_RUN", False)
     monkeypatch.setattr(
         deployment_worker.deployment_manager,
+        "stop_model_deployment",
+        lambda clients, deployment: calls.append("stop"),
+    )
+    monkeypatch.setattr(
+        deployment_worker.deployment_manager,
         "scale_model_deployment",
-        lambda clients, deployment, replicas: calls.append(replicas),
+        lambda clients, deployment, replicas: calls.append(("scale", replicas)),
     )
 
     deployment_worker.dispatch_job(FakeClients(), job_row("stop_model"), deployment_row())
     deployment_worker.dispatch_job(FakeClients(), job_row("scale_model"), deployment_row())
 
-    assert calls == [0, 3]
+    assert calls == ["stop", ("scale", 3)]
 
 
 def test_dispatch_job_calls_delete(monkeypatch) -> None:

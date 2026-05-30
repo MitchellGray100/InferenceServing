@@ -274,7 +274,7 @@ def dispatch_job(
         return
 
     if job_type == "stop_model":
-        deployment_manager.scale_model_deployment(clients, deployment, 0)
+        deployment_manager.stop_model_deployment(clients, deployment)
         return
 
     if job_type == "scale_model":

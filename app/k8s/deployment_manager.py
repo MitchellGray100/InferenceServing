@@ -158,6 +158,21 @@ def scale_model_deployment(
     return result
 
 
+def stop_model_deployment(
+    clients: k8s_client.KubernetesClients,
+    deployment: dict[str, Any],
+) -> Any:
+    """Stop a model deployment without letting an HPA scale it back up."""
+    if deployment["autoscaling_enabled"]:
+        k8s_client.delete_hpa(
+            clients,
+            deployment["k8s_namespace"],
+            deployment["k8s_hpa_name"],
+        )
+
+    return scale_model_deployment(clients, deployment, 0)
+
+
 def wait_for_model_ready(
     clients: k8s_client.KubernetesClients,
     deployment: dict[str, Any],

@@ -176,6 +176,9 @@ def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
     with transaction() as conn:
         with conn.cursor() as cur:
             for project in projects:
+                # The cleanup job must be inserted in the same transaction as
+                # metadata deletion. If the transaction rolls back, neither the
+                # project row nor its retryable cleanup record is lost.
                 enqueue_project_cleanup_job_with_cursor(cur, project)
                 cur.execute(
                     queries.get("delete_project"),
@@ -197,6 +200,9 @@ def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
 
 def enqueue_project_cleanup_job_with_cursor(cur: Any, project: Any) -> Any:
     """Insert a durable namespace cleanup job before deleting project metadata."""
+    # The cleanup table intentionally has no FK to projects because this row
+    # must outlive the project metadata long enough for the worker to delete
+    # the Kubernetes namespace.
     cur.execute(
         queries.get("create_project_cleanup_job"),
         {

@@ -139,6 +139,7 @@ def require_user_auth(view: F) -> F:
 
     @wraps(view)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
+        """Authenticate the request before invoking the protected route."""
         # Decode once at the route boundary and store only the user identifier
         # needed by downstream services.
         token = get_bearer_token()

@@ -30,6 +30,7 @@ class QueryStore:
     """In-memory collection of named SQL statements."""
 
     def __init__(self, queries: dict[str, Query]) -> None:
+        """Store already-parsed SQL queries by name."""
         self._queries = queries
 
     def get(self, name: str) -> str:

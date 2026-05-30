@@ -40,6 +40,8 @@ def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
     cluster_exists = cluster_name in existing_clusters()
     if cluster_exists:
         print(f"kind cluster already exists: {cluster_name}")
+        # `make clean-env` stops the kind node to free memory without deleting
+        # PVC/model caches, so setup must tolerate and restart a stopped node.
         start_kind_environment(cluster_name)
     else:
         print(f"Creating kind cluster: {cluster_name}")
@@ -50,6 +52,9 @@ def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
     except RuntimeError as exc:
         if not cluster_exists:
             raise
+        # If the Docker container exists but kind cannot export a kubeconfig,
+        # the cached cluster is no longer trustworthy. Recreate it rather than
+        # leaving setup-env half-configured.
         print(
             "Existing kind cluster is unusable; recreating it. "
             f"Original error: {exc}"
@@ -65,6 +70,8 @@ def ensure_kind_environment(cluster_name: str, *, gpu: bool = False) -> None:
 def validate_kind_environment(cluster_name: str) -> None:
     """Wait until the restarted kind API and default RBAC are usable."""
     context = f"kind-{cluster_name}"
+    # A just-started Docker Desktop kind node can answer container commands
+    # before the Kubernetes API/RBAC path is ready, so both checks retry.
     run_with_retries(
         ["kubectl", "get", "nodes", "--context", context],
         attempts=KIND_VALIDATION_ATTEMPTS,
@@ -99,6 +106,8 @@ def delete_kind_environment(cluster_name: str) -> None:
         print(f"kind cluster does not exist: {cluster_name}")
 
     if LOCAL_KUBECONFIG.exists():
+        # The generated kubeconfig contains kind's localhost API port. Remove it
+        # with the cluster so a later setup writes the current port/cert data.
         LOCAL_KUBECONFIG.unlink()
         print(f"Removed generated kubeconfig: {LOCAL_KUBECONFIG}")
 
@@ -226,6 +235,8 @@ def copy_nvidia_driver_libraries_to_kind_node(node_name: str) -> None:
             run(["docker", "start", container_name])
             run(["docker", "exec", container_name, "mkdir", "-p", "/tmp/miniten-gpu-libs"])
             for library_name in NVIDIA_DRIVER_LIBRARY_NAMES:
+                # Copy through a temp directory because `docker cp` cannot copy
+                # a dereferenced symlink from a container in one operation.
                 source = find_library_in_container(container_name, library_name)
                 run(
                     [
@@ -417,6 +428,8 @@ def run(args: list[str], *, capture: bool = False) -> subprocess.CompletedProces
         text=True,
     )
     if result.returncode != 0:
+        # Keep normal command output visible for setup scripts. Captured stderr
+        # is added only when the caller explicitly requested capture.
         output = result.stderr if capture else ""
         raise RuntimeError(f"{' '.join(args)} failed. {output}".strip())
     return result
@@ -438,6 +451,8 @@ def run_with_retries(
                 return result
             if result.stdout.strip().lower() in accepted_stdout:
                 return result
+            # Some readiness checks succeed at the process level but return
+            # "no" until RBAC/API bootstrap has settled.
             last_error = RuntimeError(
                 f"{' '.join(args)} returned unexpected output: {result.stdout.strip()}"
             )

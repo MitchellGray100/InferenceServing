@@ -27,6 +27,7 @@ def register_request_logging(app: Flask) -> None:
 
     @app.before_request
     def log_request_started() -> None:
+        """Record request start time and safe request metadata."""
         g.request_started_at = time.perf_counter()
         logger.info(
             "HTTP request started method=%s path=%s remote_addr=%s",
@@ -37,6 +38,7 @@ def register_request_logging(app: Flask) -> None:
 
     @app.after_request
     def log_request_finished(response: Any) -> Any:
+        """Log request completion with latency and status."""
         started_at = getattr(g, "request_started_at", None)
         latency_ms = (
             int((time.perf_counter() - started_at) * 1000)

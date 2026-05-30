@@ -8,9 +8,9 @@ OpenAI-compatible inference routes.
 The current project is an implemented MVP. It is intended to run locally with
 Docker, Docker Compose, and kind, with a later production path toward OCI/OKE.
 
-![MiniTen logo](docs/miniten%20logo.png)
+![MiniTen logo](docs/images/miniten%20logo.png)
 
-![MiniTen system design](docs/MiniTen%20System%20Design.png)
+![MiniTen system design](docs/images/MiniTen%20System%20Design.png)
 
 ## What It Does
 
@@ -223,21 +223,21 @@ model through an OpenAI-compatible API.
 
 ### Home
 
-![MiniTen home page](docs/HomePage.png)
+![MiniTen home page](docs/images/HomePage.png)
 
 The home page is the entry point for local dashboard users. From here you can
 create an account or log in to an existing MiniTen account.
 
 ### Account Creation
 
-![MiniTen account creation](docs/AccountCreation.png)
+![MiniTen account creation](docs/images/AccountCreation.png)
 
 The account creation page registers a dashboard user. User accounts own and
 manage projects, API keys, project members, and model deployments.
 
 ### Login
 
-![MiniTen login](docs/AccountLogin.png)
+![MiniTen login](docs/images/AccountLogin.png)
 
 The login page creates the browser session used for project and model
 management. It preserves your email if login fails so retrying does not clear
@@ -245,7 +245,7 @@ the form.
 
 ### Projects
 
-![MiniTen projects page](docs/ProjectsPage.png)
+![MiniTen projects page](docs/images/ProjectsPage.png)
 
 The Projects page lists the projects you can access, their Kubernetes
 namespaces, and your role in each project. It also lets you create new projects.
@@ -254,7 +254,7 @@ deployments, analytics, and Kubernetes resources.
 
 ### Project Dashboard
 
-![MiniTen project dashboard](docs/IndividualProjectDashboard.png)
+![MiniTen project dashboard](docs/images/IndividualProjectDashboard.png)
 
 The project dashboard is the main workspace for a project. It shows project
 totals, model deployments, project API keys, and project members. From this page
@@ -263,7 +263,7 @@ members, change member roles, remove members, and delete the project.
 
 ### API Key Creation
 
-![MiniTen API key creation](docs/APIKeyCreationPage.png)
+![MiniTen API key creation](docs/images/APIKeyCreationPage.png)
 
 API keys are project-scoped credentials used for inference requests. MiniTen
 shows the raw key only once when it is created. Later pages show safe metadata
@@ -271,7 +271,7 @@ such as status and stored key prefix, but never the full credential.
 
 ### Model Deployment
 
-![MiniTen model deployment page](docs/ModelDeploymentPage.png)
+![MiniTen model deployment page](docs/images/ModelDeploymentPage.png)
 
 The model deployment page manages one named model service. It shows the current
 status, Kubernetes readiness details, deployment jobs, and model settings. You
@@ -281,7 +281,7 @@ diagnostics stay readable without expanding the whole page.
 
 ### Analytics
 
-![MiniTen analytics dashboard](docs/AnalyticsDashboard.png)
+![MiniTen analytics dashboard](docs/images/AnalyticsDashboard.png)
 
 The analytics page shows request counts, success/error totals, average latency,
 p95 latency, recent requests, and lifecycle events. Recent request rows include
@@ -291,28 +291,28 @@ persisted.
 
 ### Inference
 
-![MiniTen completed inference request](docs/CompletedInferenceRequest.png)
+![MiniTen completed inference request](docs/images/CompletedInferenceRequest.png)
 
 The Inference page lets you test a deployed model from the browser with a
 project API key. It can stream OpenAI-compatible chat completion deltas as they
 arrive while also preserving the full HTTP response for inspection.
 
-![MiniTen streaming inference demo](docs/MinitenStreamingDemo.gif)
+![MiniTen streaming inference demo](docs/images/MinitenStreamingDemo.gif)
 
 ### OpenAI SDK / Notebook Usage
 
-![MiniTen Jupyter demo](docs/jupyterDemo.png)
+![MiniTen Jupyter demo](docs/images/jupyterDemo.png)
 
 MiniTen can also be called from client code using an OpenAI-compatible base URL.
 The notebook-style workflow uses the project API key, points the SDK at
 `http://127.0.0.1:8000/v1`, and sends requests to the MiniTen model deployment
 name.
 
-![MiniTen Jupyter streaming demo](docs/JupyterStreamingDemo.gif)
+![MiniTen Jupyter streaming demo](docs/images/JupyterStreamingDemo.gif)
 
 ### Account
 
-![MiniTen account page](docs/AccountPage.png)
+![MiniTen account page](docs/images/AccountPage.png)
 
 The Account page shows account metadata and contains the account deletion
 control. Account deletion is separated from project management so destructive

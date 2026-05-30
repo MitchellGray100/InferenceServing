@@ -464,6 +464,8 @@ def scale_model_deployment(
                 )
                 raise model_deployment_not_found_error()
             if deployment["autoscaling_enabled"]:
+                # HPA owns replica count while autoscaling is enabled. Letting
+                # manual scale mutate replicas would fight the controller.
                 logger.info(
                     "Manual scale rejected for autoscaled model_deployment_id=%s project_id=%s.",
                     canonical_model_deployment_id,
@@ -477,6 +479,8 @@ def scale_model_deployment(
 
             previous_replicas = int(deployment["replicas"])
             if desired_replicas != previous_replicas:
+                # Persist desired replicas before queueing the job so the
+                # worker reads one canonical source of truth.
                 cur.execute(
                     queries.get("advance_model_deployment_replicas"),
                     {
@@ -538,6 +542,8 @@ def update_model_deployment_settings(
                 raise model_deployment_not_found_error()
 
             spec = validate_deployment_update(data, current)
+            # Settings updates advance desired_generation. Older queued worker
+            # jobs with the previous generation will be skipped as stale.
             cur.execute(
                 queries.get("advance_model_deployment_settings"),
                 {
@@ -637,6 +643,9 @@ def delete_model_deployment(
             payload_source = dict(current)
             payload_source["status"] = "deleting"
             payload_source["desired_generation"] = int(payload_source["desired_generation"]) + 1
+            # Queue the delete against the generation that will exist after the
+            # status update below. That prevents older in-flight jobs from
+            # winning after deletion has been requested.
             cur.execute(
                 queries.get("advance_model_deployment_delete_requested"),
                 {"model_deployment_id": canonical_model_deployment_id},
@@ -702,6 +711,8 @@ def lifecycle_command(
 
             previous_status = deployment["status"]
             if not is_noop_lifecycle_command(job_type, previous_status):
+                # Store the requested status before queueing so the UI can show
+                # immediate intent while the worker performs slow Kubernetes work.
                 cur.execute(
                     queries.get("advance_model_deployment_status"),
                     {
@@ -797,6 +808,8 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
     )
 
     if autoscaling_enabled and min_replicas and max_replicas and min_replicas > max_replicas:
+        # Keep HPA bounds internally consistent before any Kubernetes manifest
+        # can be generated from the spec.
         raise ApiError(
             type="validation_error",
             message="min_replicas must be less than or equal to max_replicas.",
@@ -828,6 +841,8 @@ def validate_deployment_spec(data: dict[str, Any]) -> dict[str, Any]:
     )
 
     if "image" in vllm:
+        # MiniTen chooses managed CPU/GPU images. Accepting arbitrary images
+        # would bypass local smoke assumptions and later cloud policy controls.
         raise ApiError(
             type="validation_error",
             message="vllm.image is managed by MiniTen and cannot be set by clients.",
@@ -924,6 +939,8 @@ def validate_deployment_update(data: dict[str, Any], current: dict[str, Any]) ->
         },
     }
     if merged["autoscaling"]["enabled"] and "replicas" not in data:
+        # Autoscaled deployments still need a concrete Deployment replica
+        # baseline. If the user did not supply one, use min_replicas.
         merged["replicas"] = (
             merged["autoscaling"].get("min_replicas")
             or current_app.config["DEFAULT_HPA_MIN_REPLICAS"]

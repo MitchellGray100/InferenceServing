@@ -90,6 +90,7 @@ class CliState:
     """Persisted local CLI state such as base URL and bearer token."""
 
     def __init__(self, path: Path | None = None):
+        """Load configuration from the supplied path or default config path."""
         self.path = path or default_config_path()
         self.data = self.load()
 
@@ -127,6 +128,7 @@ class ApiClient:
     """Small HTTP API wrapper used by command handlers."""
 
     def __init__(self, state: CliState):
+        """Keep shared CLI state and one HTTP session for command calls."""
         self.state = state
         self.session = requests.Session()
 
@@ -145,6 +147,8 @@ class ApiClient:
         if json_body is not None:
             headers["Content-Type"] = "application/json"
         if project_api_key:
+            # Inference endpoints use project API keys as bearer credentials.
+            # Control-plane commands use the user's login token instead.
             headers["Authorization"] = f"Bearer {project_api_key}"
         elif auth:
             token = self.state.token()
@@ -611,6 +615,8 @@ def inference_chat(args: argparse.Namespace, state: CliState, client: ApiClient)
         "temperature": args.temperature,
     }
     if args.stream:
+        # Streaming prints chat deltas as SSE chunks arrive. Non-streaming
+        # keeps the full OpenAI-compatible JSON response for scripting.
         body["stream"] = True
         print_chat_stream(
             client.stream_request(
@@ -663,6 +669,8 @@ def chat_stream_line_text(line: str) -> str | None:
     try:
         payload = json.loads(payload_text)
     except json.JSONDecodeError:
+        # Some local/debug upstreams may send plain data lines. Print them
+        # rather than dropping useful diagnostics.
         return payload_text
 
     choices = payload.get("choices") if isinstance(payload, dict) else None

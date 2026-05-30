@@ -680,7 +680,7 @@ CREATE TABLE project_cleanup_jobs (
 
 Stores asynchronous jobs and command history for model lifecycle operations.
 
-This table lets MiniTen return quickly from slow control-plane requests while a background Deployment Worker or Reconciler performs the actual Kubernetes work.
+This table lets MiniTen return quickly from slow control-plane requests while a background Deployment Worker performs the actual Kubernetes work.
 
 It is also the durable record of deployment commands that were requested, attempted, retried, completed, or failed.
 
@@ -1034,7 +1034,7 @@ model_events:
 - It avoids needing Kafka or Redis for the MVP.
 - It should only be used for control-plane operations.
 - It should not be used for synchronous chat/inference requests.
-- A Deployment Worker or Reconciler should be responsible for consuming this table.
+- A Deployment Worker should be responsible for consuming this table.
 
 
 ---

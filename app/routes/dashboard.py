@@ -71,6 +71,7 @@ def require_dashboard_user(view: Handler) -> Handler:
 
     @wraps(view)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
+        """Redirect anonymous dashboard users to login."""
         if current_dashboard_user_id() is None:
             flash("Log in to continue.", "warning")
             return redirect(url_for("dashboard.login", next=request.path))
@@ -90,6 +91,8 @@ def user_id() -> str:
 def run_form_action(success_message: str, fallback: str, action: Callable[[], Any]) -> Any:
     """Run a form action and redirect with a flash message."""
     try:
+        # Form routes call service-layer functions directly so dashboard and
+        # JSON API behavior stay aligned. ApiError is converted to flash text.
         action()
         flash(success_message, "success")
     except ApiError as exc:
@@ -157,6 +160,8 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
         "memory_limit": request.form.get("memory_limit") or None,
         "gpu_count": optional_int(request.form.get("gpu_count"), "gpu_count"),
     }
+    # Drop omitted fields so partial updates preserve existing DB values rather
+    # than overwriting them with empty strings from HTML forms.
     resources = {key: value for key, value in resources.items() if value is not None}
     if resources:
         data["resources"] = resources
@@ -178,6 +183,8 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
             "target_cpu_utilization",
         ),
     }
+    # Disabled autoscaling omits min/max/target entirely. The service normalizes
+    # those values to None so stale HPA settings do not reappear later.
     autoscaling = {
         key: value for key, value in autoscaling.items() if value is not None
     }
@@ -190,6 +197,8 @@ def deployment_settings_from_form(*, include_identity: bool) -> dict[str, Any]:
 def model_form_values_from_request() -> dict[str, Any]:
     """Return a model-shaped object that preserves submitted form values."""
     autoscaling_enabled = bool_field(request.form.get("autoscaling_enabled")) is True
+    # This shape mirrors `serialize_model_deployment`, allowing the template to
+    # re-render failed submissions without a separate error-form component.
     return {
         "name": request.form.get("name", ""),
         "model_id": request.form.get("model_id", ""),
@@ -275,6 +284,7 @@ def delete_account() -> Any:
     """Delete the current user account."""
 
     def action() -> None:
+        """Delete the user and clear the dashboard session."""
         user_service.delete_user(user_id())
         session.clear()
 

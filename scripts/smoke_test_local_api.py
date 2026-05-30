@@ -29,6 +29,7 @@ class SmokeClient:
     """Small HTTP client with status assertions and progress output."""
 
     def __init__(self, base_url: str) -> None:
+        """Store the API base URL without a trailing slash."""
         self.base_url = base_url.rstrip("/")
 
     def request(

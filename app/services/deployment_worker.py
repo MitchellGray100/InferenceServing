@@ -138,6 +138,9 @@ def process_next_job(
 ) -> JobResult:
     """Claim and process one job, returning whether work was found."""
     active_worker_id = worker_id or default_worker_id()
+
+    # Deployment jobs are user-visible lifecycle commands, so workers always
+    # drain that queue before best-effort namespace cleanup work.
     job = claim_next_job(active_worker_id)
 
     if job is not None:
@@ -184,6 +187,8 @@ def process_claimed_project_cleanup_job(clients: Any, job: dict[str, Any]) -> st
     """Delete a project namespace for a claimed project cleanup job."""
     try:
         if Config.WORKER_DRY_RUN:
+            # Dry-run mode is for local API smoke tests. Marking cleanup
+            # succeeded keeps test queues moving without touching Kubernetes.
             logger.info(
                 "Dry-run worker skipped project namespace cleanup job_id=%s namespace=%s.",
                 job["project_cleanup_job_id"],
@@ -217,6 +222,10 @@ def process_claimed_job(
             mark_job_skipped(job)
             return SKIPPED_STATUS
 
+        # Kubernetes calls can take minutes. The heartbeat thread keeps the
+        # model-level lease alive while the worker waits for pods/readiness.
+        # The pre/post assertions fence off stale workers that wake up after a
+        # newer job has taken over the same model.
         with maintained_model_operation_lease(job):
             assert_job_lease_owned(job)
             dispatch_job(clients, job, deployment)
@@ -304,6 +313,8 @@ def dispatch_job(
     job_type = job["job_type"]
 
     if Config.WORKER_DRY_RUN:
+        # In dry-run mode the database/job state machine is exercised without
+        # creating pods. This is what lets `test-local-apis` run quickly.
         logger.info(
             "Dry-run worker skipped Kubernetes mutation job_id=%s job_type=%s model_deployment_id=%s.",
             job["deployment_job_id"],
@@ -337,6 +348,9 @@ def dispatch_job(
         return
 
     if job_type == "hard_restart_model":
+        # Hard restart intentionally removes all model runtime resources before
+        # reapplying desired state. It is the escape hatch for broken pods where
+        # ordinary stop/start cannot recover cleanly.
         deployment_manager.delete_model_deployment(clients, deployment)
         deployment_manager.apply_model_deployment(
             clients,
@@ -362,6 +376,8 @@ def dispatch_job(
         return
 
     if job_type == "sync_status":
+        # Sync is read-only against Kubernetes. It reconciles MiniTen's durable
+        # status with current pod readiness without changing the Deployment.
         status = deployment_manager.inspect_model_readiness(
             clients,
             deployment,
@@ -389,15 +405,19 @@ class ModelOperationLeaseMaintenance:
     """Refresh a model operation lease while a worker performs Kubernetes work."""
 
     def __init__(self, job: dict[str, Any]) -> None:
+        """Capture the claimed job and initialize heartbeat coordination state."""
         self.job = job
         self.stop_event = threading.Event()
         self.lease_lost_event = threading.Event()
         self.thread: threading.Thread | None = None
 
     def __enter__(self) -> "ModelOperationLeaseMaintenance":
+        """Start lease heartbeats before slow Kubernetes work begins."""
         if not job_has_model_operation_lease(self.job):
             return self
 
+        # Refresh once before starting the heartbeat so a nearly expired claim
+        # is extended before Kubernetes work begins.
         refresh_job_lease(self.job)
         self.thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -408,6 +428,9 @@ class ModelOperationLeaseMaintenance:
         return self
 
     def __exit__(self, *args: Any) -> bool:
+        """Stop heartbeats and report lease loss to the caller."""
+        # Stop the heartbeat before final job writes. The caller performs one
+        # last lease assertion inside the transaction that records the result.
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=5)
@@ -416,6 +439,7 @@ class ModelOperationLeaseMaintenance:
         return False
 
     def _heartbeat_loop(self) -> None:
+        """Refresh the model operation lease until work completes or ownership is lost."""
         interval = max(1.0, float(Config.WORKER_LEASE_HEARTBEAT_SECONDS))
         while not self.stop_event.wait(interval):
             try:
@@ -493,6 +517,8 @@ def release_job_lease_with_cursor(cur: Any, job: dict[str, Any]) -> None:
     if not job_has_model_operation_lease(job):
         return
 
+    # Release is token-scoped. If another worker has already stolen the lease,
+    # this update affects no rows and cannot clear the newer owner.
     cur.execute(
         queries.get("release_model_operation_lease"),
         model_operation_lease_params(job),
@@ -507,6 +533,8 @@ def mark_job_succeeded(job: dict[str, Any], deployment: dict[str, Any]) -> None:
         with conn.cursor() as cur:
             assert_job_lease_owned_with_cursor(cur, job)
             if job_type == "delete_model":
+                # Delete keeps the deployment row soft-deleted so job history
+                # and analytics remain inspectable after Kubernetes cleanup.
                 cur.execute(
                     queries.get("mark_model_deployment_deleted"),
                     {"model_deployment_id": job["model_deployment_id"]},
@@ -584,6 +612,8 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
             if job.get("model_deployment_id") is not None:
                 current = fetch_deployment_for_job_with_cursor(cur, job)
                 if current is not None and is_stale_job(job, current):
+                    # A newer desired_generation won the race while this job
+                    # was failing. Skip instead of overwriting newer state.
                     cur.execute(
                         queries.get("mark_deployment_job_skipped"),
                         {"deployment_job_id": job["deployment_job_id"]},
@@ -691,6 +721,9 @@ def classify_failure(exc: Exception) -> dict[str, str]:
     lowered = message.lower()
     category = "unknown"
 
+    # The worker sees errors from Kubernetes, vLLM, image pulls, and model
+    # downloads. Keep classification string-based so tests do not need concrete
+    # Kubernetes/vLLM exception types.
     for needle, candidate in FAILURE_CATEGORIES.items():
         if needle in lowered:
             category = candidate
@@ -812,6 +845,7 @@ def build_shutdown_event() -> threading.Event:
     stop_event = threading.Event()
 
     def request_shutdown(signum: int, _frame: Any) -> None:
+        """Set the shared stop event when the process receives a shutdown signal."""
         logger.info("Received signal %s; shutdown requested.", signum)
         stop_event.set()
 

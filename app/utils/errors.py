@@ -51,6 +51,7 @@ class ValidationError(ApiError):
         *,
         details: dict[str, Any] | None = None,
     ) -> None:
+        """Create a standard 400 validation error with optional details."""
         super().__init__(
             type="validation_error",
             message=message,
@@ -102,6 +103,7 @@ def register_error_handlers(app: Any) -> None:
 
     @app.errorhandler(ApiError)
     def handle_api_error(error: ApiError) -> tuple[Response, int] | tuple[str, int]:
+        """Convert expected application errors into API or dashboard responses."""
         logger.info(
             "Application error returned type=%s status=%s.",
             error.type,
@@ -120,6 +122,7 @@ def register_error_handlers(app: Any) -> None:
 
     @app.errorhandler(HTTPException)
     def handle_http_error(error: HTTPException) -> tuple[Response, int] | tuple[str, int]:
+        """Convert Flask/Werkzeug routing errors into MiniTen error pages."""
         status_code = error.code or 500
         if is_api_request():
             return error_response(
@@ -134,6 +137,7 @@ def register_error_handlers(app: Any) -> None:
 
     @app.errorhandler(Exception)
     def handle_unexpected_error(error: Exception) -> tuple[Response, int] | tuple[str, int]:
+        """Hide unexpected exception details from clients while logging them."""
         wrapped = InternalServerError()
         logger.exception("Unhandled application error.", exc_info=error)
         if is_api_request():

@@ -169,6 +169,8 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
     port_forward_context = contextlib.ExitStack()
 
     try:
+        # The port-forward must stay open for the whole response iterator, not
+        # just until `requests.post` returns the response headers.
         port_forward_context.enter_context(maybe_local_port_forward(deployment))
         upstream_response = requests.post(
             url,
@@ -211,8 +213,11 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
         ) from exc
 
     def generate() -> Iterator[bytes]:
+        """Yield upstream streaming chunks and record analytics when closed."""
         nonlocal error_type
         try:
+            # Preserve upstream SSE chunks exactly so OpenAI SDK clients see a
+            # real stream rather than MiniTen buffering and replaying output.
             for chunk in upstream_response.iter_content(chunk_size=None):
                 if chunk:
                     yield chunk
@@ -225,6 +230,8 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
                 exc.__class__.__name__,
             )
         finally:
+            # Streaming analytics are recorded when the client/upstream closes,
+            # because that is when latency and interrupted-stream errors are known.
             upstream_response.close()
             port_forward_context.close()
             record_streaming_inference_request(
@@ -330,6 +337,8 @@ def build_vllm_url(deployment: dict[str, Any], path: str) -> str:
     """Build the in-cluster URL for a deployment's vLLM Service."""
     local_base_url = current_app.config.get("INFERENCE_LOCAL_PORT_FORWARD_URL")
     if not local_base_url and current_app.config.get("API_DEBUG"):
+        # Host-run Flask cannot resolve ClusterIP DNS, so local development uses
+        # a localhost port that `maybe_local_port_forward` can manage.
         local_base_url = "http://127.0.0.1:18080"
     if local_base_url:
         normalized_path = path if path.startswith("/") else f"/{path}"
@@ -355,6 +364,8 @@ def maybe_local_port_forward(deployment: dict[str, Any]):
 
     port = DEFAULT_LOCAL_PORT_FORWARD_PORT
     if is_local_port_open(port):
+        # Respect an existing manual/debug port-forward instead of starting a
+        # second kubectl process on the same local port.
         yield
         return
 

@@ -218,7 +218,6 @@ app/services/api_key_service.py
 app/services/model_deployment_service.py
 app/services/inference_service.py
 app/services/deployment_worker.py
-app/services/reconciler.py
 ```
 
 Recommended support modules:
@@ -391,7 +390,7 @@ The vLLM worker reads and writes model files through the mounted filesystem path
 
 ---
 
-## 5.7 Deployment Worker / Reconciler
+## 5.7 Deployment Worker
 
 Model lifecycle operations can be slow. Deploying a model requires creating Kubernetes resources, starting pods, downloading model weights, and waiting for readiness.
 
@@ -488,13 +487,10 @@ The Deployment Worker:
 - Retries failed jobs when appropriate and stores the category-prefixed error in
   `deployment_jobs.last_error`.
 
-The Reconciler:
-
-- Periodically reads live Kubernetes Deployment, Pod, Service, and HPA state.
-- Compares Kubernetes state with `model_deployments`.
-- Corrects stale product statuses such as `deploying`, `loading`, `running`, `stopped`, and `failed`.
-- Processes explicit `sync_status` work when a deployment needs reconciliation,
-  updating DB status from live Kubernetes readiness without changing desired generation.
+Status synchronization is handled by explicit `sync_status` deployment jobs.
+Those jobs are processed by the Deployment Worker, which reads live Kubernetes
+readiness and updates MiniTen's durable status without changing desired
+generation or mutating Kubernetes resources.
 
 The API also exposes `GET /v1/projects/{projectID}/models/{modelDeploymentID}/status`
 for on-demand troubleshooting. It joins durable model metadata, recent

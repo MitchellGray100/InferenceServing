@@ -136,16 +136,14 @@ def test_build_vllm_url() -> None:
         )
 
 
-def test_build_vllm_url_uses_local_port_forward_in_debug() -> None:
-    class DebugConfig(TestConfig):
-        API_DEBUG = True
-
-    app = create_app(DebugConfig)
+def test_build_vllm_url_uses_explicit_base_url() -> None:
+    app = create_app(TestConfig)
     with app.app_context():
         assert inference_service.build_vllm_url(
             deployment_row(),
             "/v1/chat/completions",
-        ) == "http://127.0.0.1:18080/v1/chat/completions"
+            base_url="http://127.0.0.1:51234",
+        ) == "http://127.0.0.1:51234/v1/chat/completions"
 
 
 def test_upstream_request_failed_message_includes_local_port_forward_hint() -> None:
@@ -180,7 +178,8 @@ def test_maybe_local_port_forward_starts_kubectl_when_needed(monkeypatch, app) -
         calls.append(args)
         return FakeProcess()
 
-    port_checks = iter([False, True])
+    monkeypatch.setattr(inference_service, "find_free_local_port", lambda: 51234)
+    port_checks = iter([True])
     monkeypatch.setattr(inference_service, "is_local_port_open", lambda port: next(port_checks))
     monkeypatch.setattr(inference_service.subprocess, "Popen", fake_popen)
 
@@ -189,30 +188,64 @@ def test_maybe_local_port_forward_starts_kubectl_when_needed(monkeypatch, app) -
 
     debug_app = create_app(DebugConfig)
     with debug_app.app_context():
-        with inference_service.maybe_local_port_forward(deployment_row()):
+        with inference_service.maybe_local_port_forward(deployment_row()) as port:
+            assert port == 51234
             calls.append("inside")
 
     assert calls[0][:3] == ["kubectl", "port-forward", "-n"]
     assert "service/qwen-small-prod" in calls[0]
+    assert "51234:8000" in calls[0]
     assert "inside" in calls
     assert "terminate" in calls
 
 
-def test_maybe_local_port_forward_reuses_existing_forward(monkeypatch) -> None:
+def test_maybe_local_port_forward_does_not_reuse_existing_fixed_forward(monkeypatch) -> None:
     class DebugConfig(TestConfig):
         API_DEBUG = True
 
     debug_app = create_app(DebugConfig)
+    calls = []
+
+    class FakeProcess:
+        stdout = None
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout):
+            pass
+
+    monkeypatch.setattr(inference_service, "find_free_local_port", lambda: 51235)
     monkeypatch.setattr(inference_service, "is_local_port_open", lambda port: True)
     monkeypatch.setattr(
         inference_service.subprocess,
         "Popen",
-        lambda *args, **kwargs: pytest.fail("port-forward should not start"),
+        lambda args, **kwargs: calls.append(args) or FakeProcess(),
     )
 
     with debug_app.app_context():
-        with inference_service.maybe_local_port_forward(deployment_row()):
+        with inference_service.maybe_local_port_forward(deployment_row()) as port:
+            assert port == 51235
             pass
+
+    assert calls
+    assert "51235:8000" in calls[0]
+
+
+def test_vllm_request_url_uses_configured_forward_url() -> None:
+    class ForwardConfig(TestConfig):
+        INFERENCE_LOCAL_PORT_FORWARD_URL = "http://127.0.0.1:18080"
+
+    forward_app = create_app(ForwardConfig)
+    with forward_app.app_context():
+        with inference_service.vllm_request_url(
+            deployment_row(),
+            "/v1/chat/completions",
+        ) as url:
+            assert url == "http://127.0.0.1:18080/v1/chat/completions"
 
 
 def test_ensure_deployment_running_rejects_non_running() -> None:

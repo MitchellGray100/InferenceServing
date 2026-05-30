@@ -29,7 +29,6 @@ queries = load_queries()
 logger = logging.getLogger(__name__)
 VLLM_PORT = 8000
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
-DEFAULT_LOCAL_PORT_FORWARD_PORT = 18080
 
 
 def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
@@ -54,7 +53,6 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
 
     # vLLM runs behind a Kubernetes ClusterIP Service. MiniTen forwards the
     # original JSON body so vLLM handles generation parameters directly.
-    url = build_vllm_url(deployment, CHAT_COMPLETIONS_PATH)
     started = time.perf_counter()
     status_code = 502
     error_type: str | None = None
@@ -66,7 +64,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
             deployment["model_deployment_id"],
             model_name,
         )
-        with maybe_local_port_forward(deployment):
+        with vllm_request_url(deployment, CHAT_COMPLETIONS_PATH) as url:
             upstream_response = requests.post(
                 url,
                 json=data,
@@ -162,16 +160,17 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
     deployment = get_deployment_for_inference(identity["projectID"], model_name)
     ensure_deployment_running(deployment)
 
-    url = build_vllm_url(deployment, CHAT_COMPLETIONS_PATH)
     started = time.perf_counter()
     status_code = 502
     error_type: str | None = None
-    port_forward_context = contextlib.ExitStack()
+    request_url_context = contextlib.ExitStack()
 
     try:
         # The port-forward must stay open for the whole response iterator, not
         # just until `requests.post` returns the response headers.
-        port_forward_context.enter_context(maybe_local_port_forward(deployment))
+        url = request_url_context.enter_context(
+            vllm_request_url(deployment, CHAT_COMPLETIONS_PATH)
+        )
         upstream_response = requests.post(
             url,
             json=data,
@@ -181,7 +180,7 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
         status_code = upstream_response.status_code
         error_type = classify_upstream_status(status_code)
     except requests.Timeout as exc:
-        port_forward_context.close()
+        request_url_context.close()
         status_code = 504
         error_type = "upstream_timeout"
         record_streaming_inference_request(
@@ -197,7 +196,7 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
             status_code=504,
         ) from exc
     except requests.RequestException as exc:
-        port_forward_context.close()
+        request_url_context.close()
         error_type = "upstream_error"
         record_streaming_inference_request(
             identity,
@@ -233,7 +232,7 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
             # Streaming analytics are recorded when the client/upstream closes,
             # because that is when latency and interrupted-stream errors are known.
             upstream_response.close()
-            port_forward_context.close()
+            request_url_context.close()
             record_streaming_inference_request(
                 identity,
                 deployment,
@@ -333,16 +332,16 @@ def classify_upstream_status(status_code: int) -> str | None:
     return None
 
 
-def build_vllm_url(deployment: dict[str, Any], path: str) -> str:
-    """Build the in-cluster URL for a deployment's vLLM Service."""
-    local_base_url = current_app.config.get("INFERENCE_LOCAL_PORT_FORWARD_URL")
-    if not local_base_url and current_app.config.get("API_DEBUG"):
-        # Host-run Flask cannot resolve ClusterIP DNS, so local development uses
-        # a localhost port that `maybe_local_port_forward` can manage.
-        local_base_url = "http://127.0.0.1:18080"
-    if local_base_url:
+def build_vllm_url(
+    deployment: dict[str, Any],
+    path: str,
+    *,
+    base_url: str | None = None,
+) -> str:
+    """Build a URL for a deployment's vLLM Service."""
+    if base_url:
         normalized_path = path if path.startswith("/") else f"/{path}"
-        return f"{local_base_url.rstrip('/')}{normalized_path}"
+        return f"{base_url.rstrip('/')}{normalized_path}"
 
     # Kubernetes DNS lets pods call Services by
     # service.namespace.svc.cluster.local inside the cluster.
@@ -356,18 +355,33 @@ def build_vllm_url(deployment: dict[str, Any], path: str) -> str:
 
 
 @contextlib.contextmanager
-def maybe_local_port_forward(deployment: dict[str, Any]):
-    """Start a temporary port-forward for host-run local API inference."""
-    if not should_auto_port_forward():
-        yield
+def vllm_request_url(deployment: dict[str, Any], path: str) -> Iterator[str]:
+    """Yield the vLLM URL for one request, opening a local port-forward if needed."""
+    configured_base_url = current_app.config.get("INFERENCE_LOCAL_PORT_FORWARD_URL")
+    if configured_base_url:
+        yield build_vllm_url(deployment, path, base_url=configured_base_url)
         return
 
-    port = DEFAULT_LOCAL_PORT_FORWARD_PORT
-    if is_local_port_open(port):
-        # Respect an existing manual/debug port-forward instead of starting a
-        # second kubectl process on the same local port.
-        yield
+    if should_auto_port_forward():
+        with maybe_local_port_forward(deployment) as port:
+            yield build_vllm_url(
+                deployment,
+                path,
+                base_url=f"http://127.0.0.1:{port}",
+            )
         return
+
+    yield build_vllm_url(deployment, path)
+
+
+@contextlib.contextmanager
+def maybe_local_port_forward(deployment: dict[str, Any]) -> Iterator[int | None]:
+    """Start a model-specific temporary port-forward for host-run local API inference."""
+    if not should_auto_port_forward():
+        yield None
+        return
+
+    port = find_free_local_port()
 
     process = subprocess.Popen(
         [
@@ -384,7 +398,7 @@ def maybe_local_port_forward(deployment: dict[str, Any]):
     )
     try:
         wait_for_local_port_forward(process, port)
-        yield
+        yield port
     finally:
         process.terminate()
         try:
@@ -398,6 +412,13 @@ def should_auto_port_forward() -> bool:
     return bool(current_app.config.get("API_DEBUG")) and not current_app.config.get(
         "INFERENCE_LOCAL_PORT_FORWARD_URL"
     )
+
+
+def find_free_local_port() -> int:
+    """Ask the OS for an available localhost TCP port."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def is_local_port_open(port: int) -> bool:
@@ -430,10 +451,11 @@ def upstream_request_failed_message(deployment: dict[str, Any]) -> str:
     namespace = deployment["k8s_namespace"]
     service_name = deployment["k8s_service_name"]
     return (
-        f"{base} Local API development routes inference through "
-        "http://127.0.0.1:18080 by default. MiniTen tried to start a temporary "
-        "port-forward automatically. To debug manually, run: "
-        f"kubectl port-forward -n {namespace} svc/{service_name} 18080:8000"
+        f"{base} Local API development routes inference through a temporary "
+        "localhost port-forward. MiniTen tried to start one automatically. "
+        "To debug manually, run: "
+        f"kubectl port-forward -n {namespace} svc/{service_name} 18080:8000 "
+        "and set INFERENCE_LOCAL_PORT_FORWARD_URL=http://127.0.0.1:18080."
     )
 
 

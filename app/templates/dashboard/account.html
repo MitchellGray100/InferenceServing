@@ -22,8 +22,8 @@
 
 <section class="danger-zone">
   <h2>Delete account</h2>
-  <p class="muted">This removes your account and cannot be undone.</p>
-  <form method="post" action="{{ url_for('dashboard.delete_account') }}" data-confirm={{ 'Delete your MiniTen account? This cannot be undone.'|tojson }}>
+  <p class="muted">This removes your account and cannot be undone. Projects where you are the only owner will also be deleted.</p>
+  <form method="post" action="{{ url_for('dashboard.delete_account') }}" data-confirm={{ 'WARNING: deleting your account also deletes the projects and models you are the sole owner of. Are you sure you want to delete your account without assigning a new owner for your projects?'|tojson }} data-confirm-accept-label="Delete account">
     <button class="danger" type="submit">Delete account</button>
   </form>
 </section>

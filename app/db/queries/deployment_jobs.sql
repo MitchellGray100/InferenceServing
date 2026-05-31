@@ -144,6 +144,14 @@ DELETE FROM model_operation_locks
 WHERE lease_expires_at < CURRENT_TIMESTAMP
 RETURNING *;
 
+-- name: release_model_operation_locks_for_model
+-- Force-release a model lease before a preemptive delete/hard-restart job.
+-- The old worker will fail its next lease assertion and must not write final
+-- state for the preempted job.
+DELETE FROM model_operation_locks
+WHERE model_deployment_id = %(model_deployment_id)s
+RETURNING *;
+
 -- name: reset_expired_running_deployment_jobs
 -- Make abandoned running jobs eligible again when their worker lock has aged out.
 UPDATE deployment_jobs
@@ -207,6 +215,21 @@ SET
   locked_at = NULL,
   updated_at = CURRENT_TIMESTAMP
 WHERE deployment_job_id = %(deployment_job_id)s
+RETURNING *;
+
+-- name: preempt_deployment_jobs_for_model
+-- Skip all unfinished jobs for a model so a destructive command can run next.
+-- This includes the currently running job; force-releasing the model operation
+-- lock prevents that worker from recording a stale success/failure later.
+UPDATE deployment_jobs
+SET
+  status = 'skipped',
+  last_error = %(last_error)s,
+  locked_by = NULL,
+  locked_at = NULL,
+  updated_at = CURRENT_TIMESTAMP
+WHERE model_deployment_id = %(model_deployment_id)s
+  AND status IN ('queued', 'running', 'retrying')
 RETURNING *;
 
 -- name: list_deployment_jobs_for_model

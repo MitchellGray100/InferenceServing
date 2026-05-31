@@ -567,11 +567,12 @@ def model_command(project_id: str, model_id: str, command: str) -> Any:
 def model_logs(project_id: str, model_name: str) -> Any:
     """Show model logs by project-local model name."""
     current = user_id()
+    tail = log_tail_preference(project_id, model_name)
     logs = model_deployment_service.list_model_logs(
         current,
         project_id,
         model_name,
-        tail=request.args.get("tail"),
+        tail=tail,
     )
     return render_template(
         "dashboard/model_logs.html",
@@ -579,8 +580,20 @@ def model_logs(project_id: str, model_name: str) -> Any:
         model=logs["model"],
         project_id=project_id,
         model_name=model_name,
+        tail=tail,
         logs=logs["logs"],
     )
+
+
+def log_tail_preference(project_id: str, model_name: str) -> str:
+    """Return and persist the per-model logs tail preference for this session."""
+    key = f"log_tail:{project_id}:{model_name}"
+    tail = request.args.get("tail")
+    if tail is not None:
+        session[key] = tail
+        return tail
+    stored = session.get(key)
+    return stored if isinstance(stored, str) and stored else "200"
 
 
 @bp.route("/inference", methods=["GET", "POST"])

@@ -14,6 +14,15 @@ def test_load_queries_finds_expected_query_names() -> None:
     assert "heartbeat_model_operation_lease" in store.names()
     assert "verify_model_operation_lease" in store.names()
     assert "get_model_inference_metrics" in store.names()
+    assert "list_sole_owner_projects_for_user" in store.names()
+
+
+def test_account_delete_project_query_targets_sole_owned_projects() -> None:
+    store = load_queries()
+    query = store.get("list_sole_owner_projects_for_user")
+
+    assert "pm.role = 'owner'" in query
+    assert "other_pm.role = 'owner'" in query
 
 
 def test_get_unknown_query_raises_clear_key_error() -> None:

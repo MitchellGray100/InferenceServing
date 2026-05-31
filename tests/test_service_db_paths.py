@@ -161,7 +161,7 @@ def test_user_service_create_get_delete(monkeypatch) -> None:
     monkeypatch.setattr(user_service, "hash_password", lambda password: "hashed-password")
     monkeypatch.setattr(
         user_service.project_service,
-        "delete_sole_member_projects_for_user",
+        "delete_sole_owner_projects_for_user",
         lambda user_id: [],
     )
 
@@ -180,7 +180,7 @@ def test_user_service_not_found_errors(monkeypatch) -> None:
     monkeypatch.setattr(user_service, "transaction", fake.transaction)
     monkeypatch.setattr(
         user_service.project_service,
-        "delete_sole_member_projects_for_user",
+        "delete_sole_owner_projects_for_user",
         lambda user_id: pytest.fail("project cleanup should not run for missing users"),
     )
 
@@ -191,13 +191,13 @@ def test_user_service_not_found_errors(monkeypatch) -> None:
         user_service.delete_user(USER_ID)
 
 
-def test_user_delete_removes_sole_member_projects_before_account(monkeypatch) -> None:
+def test_user_delete_removes_sole_owner_projects_before_account(monkeypatch) -> None:
     fake = FakeTransaction(fetchones=[user_row(), {"user_id": USER_ID}])
     cleanup_calls = []
     monkeypatch.setattr(user_service, "transaction", fake.transaction)
     monkeypatch.setattr(
         user_service.project_service,
-        "delete_sole_member_projects_for_user",
+        "delete_sole_owner_projects_for_user",
         lambda user_id: cleanup_calls.append(user_id) or [project_row()],
     )
 
@@ -299,7 +299,7 @@ def test_project_delete_queues_cleanup_before_deleting_db_row(monkeypatch) -> No
     assert cleanup_index < delete_index
 
 
-def test_project_service_deletes_sole_member_projects(monkeypatch) -> None:
+def test_project_service_deletes_sole_owner_projects(monkeypatch) -> None:
     fake = FakeTransaction(
         fetchones=[
             {"project_cleanup_job_id": "5d6ff43f-bb5b-4373-bfea-22da7e0c8765"},
@@ -309,7 +309,7 @@ def test_project_service_deletes_sole_member_projects(monkeypatch) -> None:
     )
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
 
-    deleted = project_service.delete_sole_member_projects_for_user(USER_ID)
+    deleted = project_service.delete_sole_owner_projects_for_user(USER_ID)
 
     assert deleted[0]["projectID"] == PROJECT_ID
     assert any(
@@ -318,7 +318,7 @@ def test_project_service_deletes_sole_member_projects(monkeypatch) -> None:
     )
 
 
-def test_project_service_queues_sole_member_cleanup_before_delete(
+def test_project_service_queues_sole_owner_cleanup_before_delete(
     monkeypatch,
 ) -> None:
     fake = FakeTransaction(
@@ -330,7 +330,7 @@ def test_project_service_queues_sole_member_cleanup_before_delete(
     )
     monkeypatch.setattr(project_service, "transaction", fake.transaction)
 
-    deleted = project_service.delete_sole_member_projects_for_user(USER_ID)
+    deleted = project_service.delete_sole_owner_projects_for_user(USER_ID)
 
     assert deleted[0]["projectID"] == PROJECT_ID
     cleanup_index = next(
@@ -819,6 +819,7 @@ def test_model_scale_rejects_autoscaled_deployments(monkeypatch, app) -> None:
 
 def test_model_hard_restart_enqueues_force_recreate_job(monkeypatch, app) -> None:
     queued_payloads = []
+    preemptions = []
     fake = FakeTransaction(
         fetchones=[
             {"role": "member"},
@@ -837,6 +838,13 @@ def test_model_hard_restart_enqueues_force_recreate_job(monkeypatch, app) -> Non
         "enqueue_deployment_job_with_cursor",
         enqueue_job,
     )
+    monkeypatch.setattr(
+        model_deployment_service,
+        "preempt_deployment_jobs_with_cursor",
+        lambda cur, model_deployment_id, *, reason: preemptions.append(
+            (model_deployment_id, reason)
+        ),
+    )
 
     with app.app_context():
         restarted = model_deployment_service.hard_restart_model_deployment(
@@ -849,6 +857,66 @@ def test_model_hard_restart_enqueues_force_recreate_job(monkeypatch, app) -> Non
     assert restarted["deploymentJob"]["job_type"] == "hard_restart_model"
     assert queued_payloads[0]["force_recreate"] is True
     assert queued_payloads[0]["previous_status"] == "running"
+    assert preemptions == [(MODEL_DEPLOYMENT_ID, "Preempted by hard_restart_model.")]
+
+
+def test_model_delete_preempts_existing_jobs_before_enqueue(monkeypatch, app) -> None:
+    events = []
+    fake = FakeTransaction(
+        fetchones=[
+            {"role": "member"},
+            deployment_row(status="deploying"),
+            deployment_row(status="deleting", desired_generation=2),
+        ],
+    )
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    def enqueue_job(cur, project_id, model_deployment_id, job_type, payload):
+        events.append(("enqueue", job_type, payload["desired_generation"]))
+        return job_row(job_type=job_type, desired_generation=payload["desired_generation"])
+
+    monkeypatch.setattr(
+        model_deployment_service,
+        "enqueue_deployment_job_with_cursor",
+        enqueue_job,
+    )
+    monkeypatch.setattr(
+        model_deployment_service,
+        "preempt_deployment_jobs_with_cursor",
+        lambda cur, model_deployment_id, *, reason: events.append(
+            ("preempt", model_deployment_id, reason)
+        ),
+    )
+
+    with app.app_context():
+        deleted = model_deployment_service.delete_model_deployment(
+            USER_ID,
+            PROJECT_ID,
+            MODEL_DEPLOYMENT_ID,
+        )
+
+    assert deleted["deploymentJob"]["job_type"] == "delete_model"
+    assert events == [
+        ("preempt", MODEL_DEPLOYMENT_ID, "Preempted by delete_model."),
+        ("enqueue", "delete_model", 2),
+    ]
+
+
+def test_preempt_deployment_jobs_skips_jobs_and_releases_model_lock() -> None:
+    cursor = FakeCursor()
+
+    model_deployment_service.preempt_deployment_jobs_with_cursor(
+        cursor,
+        MODEL_DEPLOYMENT_ID,
+        reason="Preempted by delete_model.",
+    )
+
+    assert len(cursor.executed) == 2
+    assert cursor.executed[0][1] == {
+        "model_deployment_id": MODEL_DEPLOYMENT_ID,
+        "last_error": "Preempted by delete_model.",
+    }
+    assert cursor.executed[1][1] == {"model_deployment_id": MODEL_DEPLOYMENT_ID}
 
 
 def test_model_deployment_service_error_branches(monkeypatch, app) -> None:

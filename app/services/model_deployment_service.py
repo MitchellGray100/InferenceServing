@@ -420,6 +420,7 @@ def hard_restart_model_deployment(
         job_type=JOB_TYPES["hard_restart"],
         requested_status="deploying",
         payload_extra={"force_recreate": True},
+        preempt_existing_jobs=True,
     )
 
 
@@ -651,6 +652,11 @@ def delete_model_deployment(
                 {"model_deployment_id": canonical_model_deployment_id},
             )
             deployment = cur.fetchone()
+            preempt_deployment_jobs_with_cursor(
+                cur,
+                canonical_model_deployment_id,
+                reason="Preempted by delete_model.",
+            )
             job = enqueue_deployment_job_with_cursor(
                 cur,
                 canonical_project_id,
@@ -679,6 +685,7 @@ def lifecycle_command(
     job_type: str,
     requested_status: str,
     payload_extra: dict[str, Any],
+    preempt_existing_jobs: bool = False,
 ) -> dict[str, Any]:
     """Apply a simple status transition and enqueue a lifecycle job.
 
@@ -721,6 +728,13 @@ def lifecycle_command(
                     },
                 )
                 deployment = cur.fetchone()
+
+            if preempt_existing_jobs:
+                preempt_deployment_jobs_with_cursor(
+                    cur,
+                    canonical_model_deployment_id,
+                    reason=f"Preempted by {job_type}.",
+                )
 
             job = enqueue_deployment_job_with_cursor(
                 cur,
@@ -1193,6 +1207,26 @@ def enqueue_deployment_job_with_cursor(
         payload["desired_generation"],
     )
     return job
+
+
+def preempt_deployment_jobs_with_cursor(
+    cur: Any,
+    model_deployment_id: str,
+    *,
+    reason: str,
+) -> None:
+    """Skip unfinished model jobs and release the active model operation lease."""
+    cur.execute(
+        queries.get("preempt_deployment_jobs_for_model"),
+        {
+            "model_deployment_id": model_deployment_id,
+            "last_error": reason,
+        },
+    )
+    cur.execute(
+        queries.get("release_model_operation_locks_for_model"),
+        {"model_deployment_id": model_deployment_id},
+    )
 
 
 def build_job_payload(

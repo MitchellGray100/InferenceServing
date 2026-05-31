@@ -71,6 +71,15 @@ def apply_model_deployment(
     if manifests["hpa"] is not None:
         k8s_client.apply_hpa(clients, manifests["hpa"])
         k8s_client.read_hpa(clients, deployment["k8s_namespace"], deployment["k8s_hpa_name"])
+    else:
+        # A settings update can turn autoscaling off after an HPA already
+        # exists. Reconcile absence explicitly so the old HPA cannot continue
+        # controlling replicas behind MiniTen's back.
+        k8s_client.delete_hpa(
+            clients,
+            deployment["k8s_namespace"],
+            deployment["k8s_hpa_name"],
+        )
 
     wait_for_model_ready(clients, deployment)
     logger.info(

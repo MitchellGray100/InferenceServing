@@ -31,12 +31,12 @@ TOP_LEVEL_HELP = """command reference:
   auth login --email <email> [--password <password>]
   auth logout
   auth me
-  auth delete-user
+  auth delete-user [--yes]
 
   projects create <name>
   projects list
   projects get <project-id>
-  projects delete <project-id>
+  projects delete <project-id> [--yes]
 
   members list <project-id>
   members add <project-id> --email <email> --role {owner,member,viewer}
@@ -60,9 +60,11 @@ TOP_LEVEL_HELP = """command reference:
   models update <project-id> <model-deployment-id> [model settings options] [--json <json-object>]
   models start <project-id> <model-deployment-id>
   models stop <project-id> <model-deployment-id>
+  models retry <project-id> <model-deployment-id>
   models sync <project-id> <model-deployment-id>
   models scale <project-id> <model-deployment-id> <replicas>
-  models delete <project-id> <model-deployment-id>
+  models hard-restart <project-id> <model-deployment-id> [--yes]
+  models delete <project-id> <model-deployment-id> [--yes]
   models jobs <project-id> <model-deployment-id>
   models status <project-id> <model-deployment-id>
   models logs <project-id> <model-name> [--tail <lines>]
@@ -281,6 +283,29 @@ def parse_json_arg(args: argparse.Namespace) -> dict[str, Any]:
     return value
 
 
+def add_yes_arg(parser: argparse.ArgumentParser) -> None:
+    """Add a non-interactive confirmation bypass for destructive commands."""
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation prompt.",
+    )
+
+
+def confirm_or_raise(args: argparse.Namespace, message: str) -> None:
+    """Require user confirmation unless --yes was passed."""
+    if getattr(args, "yes", False):
+        return
+
+    try:
+        answer = input(f"{message}\nType yes to continue: ")
+    except EOFError as exc:
+        raise CliError("Confirmation required. Re-run with --yes to skip the prompt.") from exc
+
+    if answer.strip().lower() != "yes":
+        raise CliError("Cancelled.")
+
+
 def add_model_settings_args(parser: argparse.ArgumentParser) -> None:
     """Add common deployment settings flags."""
     parser.add_argument("--replicas", type=int)
@@ -406,8 +431,15 @@ def user_me(_args: argparse.Namespace, _state: CliState, client: ApiClient) -> N
     print_json(client.request("GET", "/v1/users/me"))
 
 
-def user_delete(_args: argparse.Namespace, state: CliState, client: ApiClient) -> None:
+def user_delete(args: argparse.Namespace, state: CliState, client: ApiClient) -> None:
     """Delete the current user."""
+    confirm_or_raise(
+        args,
+        (
+            "WARNING: deleting your account also deletes the projects and models "
+            "you are the sole owner of."
+        ),
+    )
     body = client.request("DELETE", "/v1/users/me")
     state.data.pop("access_token", None)
     state.save()
@@ -431,6 +463,10 @@ def project_get(args: argparse.Namespace, _state: CliState, client: ApiClient) -
 
 def project_delete(args: argparse.Namespace, _state: CliState, client: ApiClient) -> None:
     """Delete a project."""
+    confirm_or_raise(
+        args,
+        "Delete this project and its models? This cannot be undone.",
+    )
     print_json(client.request("DELETE", f"/v1/projects/{args.project_id}"))
 
 
@@ -547,11 +583,20 @@ def model_command(
     command: str,
 ) -> None:
     """Run a model lifecycle command."""
+    if command == "hard-restart":
+        confirm_or_raise(
+            args,
+            (
+                "Hard restart this model? This force deletes Kubernetes runtime "
+                "resources and recreates the deployment."
+            ),
+        )
     body = {"replicas": args.replicas} if command == "scale" else None
+    api_command = "start" if command == "retry" else command
     print_json(
         client.request(
             "POST",
-            f"/v1/projects/{args.project_id}/models/{args.model_id}/{command}",
+            f"/v1/projects/{args.project_id}/models/{args.model_id}/{api_command}",
             json_body=body,
         )
     )
@@ -559,6 +604,10 @@ def model_command(
 
 def model_delete(args: argparse.Namespace, _state: CliState, client: ApiClient) -> None:
     """Delete a model deployment."""
+    confirm_or_raise(
+        args,
+        "Delete this model deployment? This queues Kubernetes cleanup and cannot be undone.",
+    )
     print_json(
         client.request(
             "DELETE",
@@ -788,7 +837,9 @@ def build_parser() -> argparse.ArgumentParser:
     login.set_defaults(handler=auth_login)
     auth_sub.add_parser("logout").set_defaults(handler=auth_logout)
     auth_sub.add_parser("me").set_defaults(handler=user_me)
-    auth_sub.add_parser("delete-user").set_defaults(handler=user_delete)
+    delete_user = auth_sub.add_parser("delete-user")
+    add_yes_arg(delete_user)
+    delete_user.set_defaults(handler=user_delete)
 
     projects = subcommands.add_parser("projects")
     projects_sub = projects.add_subparsers(dest="command", required=True)
@@ -801,6 +852,7 @@ def build_parser() -> argparse.ArgumentParser:
     get_project.set_defaults(handler=project_get)
     delete_project = projects_sub.add_parser("delete")
     delete_project.add_argument("project_id")
+    add_yes_arg(delete_project)
     delete_project.set_defaults(handler=project_delete)
 
     members = subcommands.add_parser("members")
@@ -863,10 +915,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_model_settings_args(update_model)
     add_json_arg(update_model)
     update_model.set_defaults(handler=model_update)
-    for command in ["start", "stop", "hard-restart", "sync"]:
+    for command in ["start", "stop", "retry", "hard-restart", "sync"]:
         command_parser = models_sub.add_parser(command)
         command_parser.add_argument("project_id")
         command_parser.add_argument("model_id")
+        if command == "hard-restart":
+            add_yes_arg(command_parser)
         command_parser.set_defaults(
             handler=lambda args, state, client, cmd=command: model_command(
                 args,
@@ -885,6 +939,7 @@ def build_parser() -> argparse.ArgumentParser:
     delete_model = models_sub.add_parser("delete")
     delete_model.add_argument("project_id")
     delete_model.add_argument("model_id")
+    add_yes_arg(delete_model)
     delete_model.set_defaults(handler=model_delete)
     jobs = models_sub.add_parser("jobs")
     jobs.add_argument("project_id")

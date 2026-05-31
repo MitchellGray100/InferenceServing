@@ -155,8 +155,8 @@ def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
     return {"deleted": True}
 
 
-def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
-    """Delete projects that would become orphaned by deleting a sole member.
+def delete_sole_owner_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
+    """Delete projects that would have no owner after deleting this user.
 
     Namespace cleanup is queued before database rows are deleted, so account
     deletion does not leave project Kubernetes resources without a retryable
@@ -167,7 +167,7 @@ def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                queries.get("list_sole_member_projects_for_user"),
+                queries.get("list_sole_owner_projects_for_user"),
                 {"user_id": canonical_user_id},
             )
             projects = cur.fetchall()
@@ -190,7 +190,7 @@ def delete_sole_member_projects_for_user(user_id: Any) -> list[dict[str, Any]]:
 
     if deleted_projects:
         logger.info(
-            "Deleted sole-member projects for user_id=%s count=%s.",
+            "Deleted sole-owner projects for user_id=%s count=%s.",
             canonical_user_id,
             len(deleted_projects),
         )

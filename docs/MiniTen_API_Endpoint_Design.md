@@ -358,7 +358,10 @@ Users can only delete their own account. The user is resolved from the auth toke
 
 ### Behavior
 
-Performs soft deletion of data.
+Deletes the authenticated user account. Before deleting the user row, MiniTen
+deletes projects where that user is the only owner and queues Kubernetes
+namespace cleanup for those projects. Projects with at least one other owner are
+left in place; the deleted user's membership is removed by database cascade.
 
 ### Response
 

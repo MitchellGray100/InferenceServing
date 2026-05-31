@@ -34,10 +34,10 @@ JOIN project_members pm ON pm.project_id = p.project_id
 WHERE pm.user_id = %(user_id)s
 ORDER BY p.created_at DESC;
 
--- name: list_sole_member_projects_for_user
--- Find projects where the given user is the only remaining member. These
--- projects become inaccessible after account deletion, so account deletion
--- tears down their Kubernetes namespace and database metadata first.
+-- name: list_sole_owner_projects_for_user
+-- Find projects where the given user is the only remaining owner. Deleting the
+-- user would otherwise leave the project without an administrator, so account
+-- deletion tears down those projects and their Kubernetes namespaces first.
 SELECT
   p.project_id,
   p.name,
@@ -48,11 +48,13 @@ SELECT
 FROM projects p
 JOIN project_members pm ON pm.project_id = p.project_id
 WHERE pm.user_id = %(user_id)s
+  AND pm.role = 'owner'
   AND NOT EXISTS (
     SELECT 1
     FROM project_members other_pm
     WHERE other_pm.project_id = p.project_id
       AND other_pm.user_id <> %(user_id)s
+      AND other_pm.role = 'owner'
   )
 ORDER BY p.created_at DESC;
 

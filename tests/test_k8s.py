@@ -309,7 +309,23 @@ def test_deployment_manager_apply_secret_and_no_hpa() -> None:
     )
 
     assert "create_namespaced_secret" in clients.core.calls
-    assert clients.autoscaling.calls == []
+    assert clients.autoscaling.calls == [
+        "delete_namespaced_horizontal_pod_autoscaler"
+    ]
+
+
+def test_deployment_manager_apply_deletes_stale_hpa_when_autoscaling_disabled() -> None:
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(),
+        apps=FakeApps(),
+        autoscaling=FakeHpa(),
+    )
+
+    apply_model_deployment(clients, deployment_payload(autoscaling_enabled=False))
+
+    assert clients.autoscaling.calls == [
+        "delete_namespaced_horizontal_pod_autoscaler"
+    ]
 
 
 def test_deployment_manager_delete_with_cache_and_secret() -> None:

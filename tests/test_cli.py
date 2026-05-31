@@ -227,6 +227,73 @@ def test_http_error_is_printed(cli_config, monkeypatch, capsys):
     assert "GET /v1/projects failed with 403: forbidden" in capsys.readouterr().err
 
 
+def test_project_delete_requires_confirmation(cli_config, calls, monkeypatch, capsys):
+    write_config(cli_config, access_token="user-token")
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+
+    exit_code = cli.main(["projects", "delete", "project-id"])
+
+    assert exit_code == 1
+    assert calls == []
+    assert "Cancelled." in capsys.readouterr().err
+
+
+def test_project_delete_yes_skips_confirmation(cli_config, calls):
+    write_config(cli_config, access_token="user-token")
+
+    exit_code = cli.main(["projects", "delete", "project-id", "--yes"])
+
+    assert exit_code == 0
+    assert calls[0]["method"] == "DELETE"
+    assert calls[0]["url"].endswith("/v1/projects/project-id")
+
+
+def test_user_delete_yes_clears_saved_token(cli_config, calls):
+    write_config(cli_config, access_token="user-token")
+
+    exit_code = cli.main(["auth", "delete-user", "--yes"])
+
+    assert exit_code == 0
+    assert calls[0]["method"] == "DELETE"
+    assert calls[0]["url"].endswith("/v1/users/me")
+    assert "access_token" not in json.loads(cli_config.read_text(encoding="utf-8"))
+
+
+def test_model_delete_requires_confirmation(cli_config, calls, monkeypatch, capsys):
+    write_config(cli_config, access_token="user-token")
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+
+    exit_code = cli.main(["models", "delete", "project-id", "model-id"])
+
+    assert exit_code == 1
+    assert calls == []
+    assert "Cancelled." in capsys.readouterr().err
+
+
+def test_model_hard_restart_yes_skips_confirmation(cli_config, calls):
+    write_config(cli_config, access_token="user-token")
+
+    exit_code = cli.main(
+        ["models", "hard-restart", "project-id", "model-id", "--yes"]
+    )
+
+    assert exit_code == 0
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith(
+        "/v1/projects/project-id/models/model-id/hard-restart"
+    )
+
+
+def test_model_retry_uses_start_api_path(cli_config, calls):
+    write_config(cli_config, access_token="user-token")
+
+    exit_code = cli.main(["models", "retry", "project-id", "model-id"])
+
+    assert exit_code == 0
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/v1/projects/project-id/models/model-id/start")
+
+
 def test_top_level_help_shows_command_inputs(capsys):
     with pytest.raises(SystemExit) as exit_info:
         cli.build_parser().parse_args(["-h"])
@@ -235,5 +302,7 @@ def test_top_level_help_shows_command_inputs(capsys):
     assert exit_info.value.code == 0
     assert "command reference:" in output
     assert "auth login --email <email> [--password <password>]" in output
+    assert "auth delete-user [--yes]" in output
     assert "models deploy <project-id> --name <name> --model-id <hf-model-id>" in output
+    assert "models retry <project-id> <model-deployment-id>" in output
     assert "inference chat [--api-key <project-api-key>]" in output

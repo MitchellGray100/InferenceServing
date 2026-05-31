@@ -81,6 +81,7 @@ make setup-web
 - Starts Postgres with Docker Compose.
 - Runs database migrations.
 - Creates or reuses a local kind cluster named `miniten`.
+- Installs/patches metrics-server for local HPA autoscaling.
 - Starts the deployment worker with real Kubernetes access.
 - Starts the Flask API/dashboard in the background.
 - Opens the dashboard in your browser.
@@ -142,6 +143,7 @@ make start-kind
 make stop-kind
 make clean-kind
 make clean-all
+make install-metrics-server
 make migrate
 make run-api
 make run-worker
@@ -164,10 +166,10 @@ What the important targets do:
 | Target | Purpose |
 |---|---|
 | `make install` | Installs Poetry and project dependencies. |
-| `make setup-env` | Starts Postgres, runs migrations, creates kind, starts dry-run worker. |
-| `make setup-web` | Runs setup, switches worker to real Kubernetes, starts dashboard/API, opens browser. |
+| `make setup-env` | Starts Postgres, runs migrations, creates kind, starts dry-run Compose workers. |
+| `make setup-web` | Runs setup, switches Compose workers to real Kubernetes, starts dashboard/API, opens browser. |
 | `make open-dashboard` | Starts or reopens the local dashboard/API. |
-| `make start-worker-real-k8s` | Restarts the worker with `WORKER_DRY_RUN=false`. |
+| `make start-worker-real-k8s` | Restarts Compose workers with `WORKER_DRY_RUN=false`. |
 | `make run-api` | Runs Flask API/dashboard in the foreground. |
 | `make run-worker` | Runs the deployment worker in the foreground using real Kubernetes. |
 | `make run-worker-dry-run` | Runs the worker without mutating Kubernetes. |
@@ -176,6 +178,7 @@ What the important targets do:
 | `make stop-kind` | Stops the local kind node without deleting PVC/cache data. |
 | `make clean-kind` | Deletes the local kind cluster. |
 | `make clean-all` | Runs `clean-env` and `clean-kind`. |
+| `make install-metrics-server` | Installs/patches metrics-server in the local kind cluster for HPA autoscaling. |
 | `make test` | Runs the Python unit test suite. |
 | `make test-local-apis` | Runs API smoke tests against a running local API. |
 | `make test-local-k8s` | Tests real Kubernetes resource creation/deletion with a lightweight smoke worker. |
@@ -319,7 +322,9 @@ Example notebooks are available in `examples/minitendemo.ipynb` and
 
 The Account page shows account metadata and contains the account deletion
 control. Account deletion is separated from project management so destructive
-account-level actions are not mixed into the project list.
+account-level actions are not mixed into the project list. Deleting an account
+also deletes projects where that account is the only owner; assign another
+owner first if a project should remain after the account is removed.
 
 ## CLI
 
@@ -362,12 +367,12 @@ command reference:
   auth login --email <email> [--password <password>]
   auth logout
   auth me
-  auth delete-user
+  auth delete-user [--yes]
 
   projects create <name>
   projects list
   projects get <project-id>
-  projects delete <project-id>
+  projects delete <project-id> [--yes]
 
   members list <project-id>
   members add <project-id> --email <email> --role {owner,member,viewer}
@@ -392,10 +397,11 @@ command reference:
       [--json <json-object>]
   models start <project-id> <model-deployment-id>
   models stop <project-id> <model-deployment-id>
-  models hard-restart <project-id> <model-deployment-id>
+  models retry <project-id> <model-deployment-id>
   models sync <project-id> <model-deployment-id>
   models scale <project-id> <model-deployment-id> <replicas>
-  models delete <project-id> <model-deployment-id>
+  models hard-restart <project-id> <model-deployment-id> [--yes]
+  models delete <project-id> <model-deployment-id> [--yes]
   models jobs <project-id> <model-deployment-id>
   models status <project-id> <model-deployment-id>
   models logs <project-id> <model-name> [--tail <lines>]
@@ -861,6 +867,7 @@ Common environment variables:
 | `API_KEY_HASH_SECRET` | HMAC secret for project API keys. |
 | `KUBECONFIG_DIR` | Directory used by local worker kubeconfig. |
 | `WORKER_DRY_RUN` | When `true`, worker marks jobs without changing Kubernetes. |
+| `WORKER_REPLICAS` | Number of Compose deployment workers, defaults to `2`. |
 | `HUGGING_FACE_TOKEN` | Optional token for private/gated Hugging Face models. |
 | `VLLM_CPU_MEMORY_UTILIZATION` | CPU KV-cache reservation tuning for vLLM. |
 | `LOG_LEVEL` | Logging level, defaults to `INFO`. |

@@ -7,6 +7,7 @@ function dismissMessage(button) {
 
 function openConfirmDialog(form) {
   const message = form.dataset.confirm;
+  const acceptLabel = form.dataset.confirmAcceptLabel || "Confirm";
   if (!message) {
     form.submit();
     return;
@@ -19,12 +20,13 @@ function openConfirmDialog(form) {
       <h2 id="confirm-title">Confirm action</h2>
       <p></p>
       <div class="actions">
-        <button class="danger" type="button" data-confirm-accept>Confirm</button>
+        <button class="danger" type="button" data-confirm-accept></button>
         <button class="secondary" type="button" data-confirm-cancel>Cancel</button>
       </div>
     </div>
   `;
   backdrop.querySelector("p").textContent = message;
+  backdrop.querySelector("[data-confirm-accept]").textContent = acceptLabel;
   document.body.append(backdrop);
 
   const close = () => backdrop.remove();

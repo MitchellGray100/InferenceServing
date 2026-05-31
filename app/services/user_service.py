@@ -94,8 +94,8 @@ def get_user(user_id: Any) -> dict[str, Any]:
 def delete_user(user_id: Any) -> dict[str, bool]:
     """Delete the authenticated user account.
 
-    Projects where this user is the only remaining member are deleted first so
-    Kubernetes namespaces and model resources are not orphaned.
+    Projects where this user is the only owner are deleted first so account
+    deletion cannot leave ownerless projects or orphaned Kubernetes resources.
     """
     # The current `/me` route supplies this ID from the bearer token, so callers
     # cannot delete arbitrary user IDs through the public API.
@@ -117,7 +117,7 @@ def delete_user(user_id: Any) -> dict[str, bool]:
             status_code=404,
         )
 
-    deleted_projects = project_service.delete_sole_member_projects_for_user(
+    deleted_projects = project_service.delete_sole_owner_projects_for_user(
         canonical_user_id
     )
 
@@ -140,7 +140,7 @@ def delete_user(user_id: Any) -> dict[str, bool]:
         )
 
     logger.info(
-        "Deleted user user_id=%s sole_member_projects_deleted=%s.",
+        "Deleted user user_id=%s sole_owner_projects_deleted=%s.",
         canonical_user_id,
         len(deleted_projects),
     )

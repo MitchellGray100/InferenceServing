@@ -256,7 +256,8 @@ def test_account_page_shows_account_controls(monkeypatch):
     assert response.status_code == 200
     assert b"user@example.com" in response.data
     assert b"Delete account" in response.data
-    assert b'data-confirm="Delete your MiniTen account? This cannot be undone."' in response.data
+    assert b"deleting your account also deletes the projects and models" in response.data
+    assert b'data-confirm-accept-label="Delete account"' in response.data
 
 
 def test_login_preserves_email_after_failed_attempt(monkeypatch):
@@ -926,6 +927,33 @@ def test_model_logs_has_back_to_model_button(monkeypatch):
         in response.data
     )
     assert b"ready" in response.data
+
+
+def test_model_logs_remembers_tail_per_model(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+    tails = []
+    monkeypatch.setattr(
+        "app.routes.dashboard.project_service.get_project",
+        lambda user_id, project_id: project(),
+    )
+    monkeypatch.setattr(
+        "app.routes.dashboard.model_deployment_service.list_model_logs",
+        lambda user_id, project_id, model_name, tail: tails.append(tail)
+        or {
+            "model": model(),
+            "logs": [{"pod": "qwen-pod", "text": "ready"}],
+        },
+    )
+
+    first = client.get(f"/projects/{project()['projectID']}/models/qwen/logs?tail=75")
+    second = client.get(f"/projects/{project()['projectID']}/models/qwen/logs")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert tails == ["75", "75"]
+    assert b'name="tail" type="number" min="1" max="1000" value="75"' in second.data
 
 
 def test_inference_page_posts_chat_completion(monkeypatch):

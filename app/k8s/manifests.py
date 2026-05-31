@@ -537,22 +537,22 @@ def build_resource_requirements(deployment: dict[str, Any]) -> dict[str, Any]:
 
 
 def names_from_deployment(deployment: dict[str, Any]) -> dict[str, str]:
-    """Return Kubernetes names from metadata, deriving optional names as needed."""
-    # Older tests or future callers can pass only namespace/name; persisted rows
-    # can override the generated names with the exact values stored at create time.
-    names = build_model_resource_names(
+    """Return Kubernetes resource names for persisted and derived resources."""
+    # Deployment, Service, and HPA names are stored with the deployment row.
+    # PVC/Secret names are deterministic companion resources derived from the
+    # namespace and project-local model name.
+    derived_names = build_model_resource_names(
         deployment["k8s_namespace"],
         deployment["name"],
     )
-    names["k8s_deployment_name"] = deployment.get(
-        "k8s_deployment_name",
-        names["k8s_deployment_name"],
-    )
-    names["k8s_service_name"] = deployment.get(
-        "k8s_service_name",
-        names["k8s_service_name"],
-    )
-    names["k8s_hpa_name"] = deployment.get("k8s_hpa_name", names["k8s_hpa_name"])
+    names = {
+        "k8s_namespace": deployment["k8s_namespace"],
+        "k8s_deployment_name": deployment["k8s_deployment_name"],
+        "k8s_service_name": deployment["k8s_service_name"],
+        "k8s_hpa_name": deployment["k8s_hpa_name"],
+        "k8s_pvc_name": derived_names["k8s_pvc_name"],
+        "k8s_secret_name": derived_names["k8s_secret_name"],
+    }
 
     for field, value in names.items():
         validate_dns_label(value, field)

@@ -6,7 +6,7 @@
   <div class="actions">
     <a class="button secondary" href="{{ url_for('dashboard.model_detail', project_id=project.projectID, model_id=model.modelDeploymentID) }}">Back to model</a>
     <form method="get" class="inline-form">
-      <input name="tail" type="number" min="1" max="1000" placeholder="200">
+      <input name="tail" type="number" min="1" max="1000" value="{{ tail }}" placeholder="200">
       <button type="submit">Refresh</button>
     </form>
   </div>

@@ -5,7 +5,7 @@ https://miniten.app
 MiniTen is a local-first inference serving platform for deploying Hugging Face
 LLMs as named vLLM workers on Kubernetes. It includes a Flask API, server-rendered
 web dashboard, CLI, Postgres metadata store, Kubernetes deployment worker, and
-OpenAI-compatible inference routes.
+OpenAI-compatible inference routes. Also supports [Truss](https://github.com/basetenlabs/truss)-style commands.
 
 The current project is an implemented MVP. It is intended to run locally with
 Docker, Docker Compose, and kind, with a later production path toward OCI/OKE.
@@ -26,6 +26,7 @@ MiniTen lets you:
 - View model status, jobs, logs, analytics, and lifecycle events.
 - Send OpenAI-compatible `/v1/chat/completions` requests.
 - Use the same workflows from the web dashboard or `miniten` CLI.
+- Run [Truss](https://github.com/basetenlabs/truss)-style commands
 
 The Flask app is the control plane and request router. vLLM pods do the actual
 model inference.

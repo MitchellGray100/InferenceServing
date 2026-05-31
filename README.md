@@ -12,6 +12,8 @@ Docker, Docker Compose, and kind, with a later production path toward OCI/OKE.
 
 ![MiniTen logo](docs/images/miniten%20logo.png)
 
+![MiniTen streaming inference demo](docs/images/MinitenStreamingDemo.gif)
+
 ![MiniTen system design](docs/images/MiniTen%20System%20Design.png)
 
 ## What It Does

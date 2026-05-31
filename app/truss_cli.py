@@ -563,6 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Console entrypoint for the Truss-style wrapper."""
+    configure_output_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
     state = cli.CliState()
@@ -573,6 +574,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"truss: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def configure_output_streams() -> None:
+    """Prefer UTF-8 output so Truss status icons work on Windows pipes."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
 
 
 if __name__ == "__main__":

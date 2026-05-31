@@ -41,6 +41,7 @@ def run_truss_vllm_smoke_test(
     port_forward_port: int,
 ) -> None:
     """Deploy real vLLM using Truss commands, call inference, and clean up."""
+    configure_output_streams()
     client = SmokeClient(base_url)
     suffix = uuid.uuid4().hex[:8]
     email = f"truss-vllm-smoke-{suffix}@example.com"
@@ -203,6 +204,7 @@ def run_truss_vllm_smoke_test(
 
 def run_truss(args: list[str], *, cwd: Path, env: dict[str, str]) -> None:
     """Run the local Truss CLI and fail with captured output on error."""
+    env = {**env, "PYTHONIOENCODING": "utf-8"}
     command = [sys.executable, "-m", "app.truss_cli", *args]
     result = subprocess.run(
         command,
@@ -222,6 +224,18 @@ def run_truss(args: list[str], *, cwd: Path, env: dict[str, str]) -> None:
         raise RuntimeError(
             f"truss {' '.join(args)} failed with exit code {result.returncode}"
         )
+
+
+def configure_output_streams() -> None:
+    """Prefer UTF-8 output so captured Truss icons print on Windows."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
 
 
 def write_truss_config(

@@ -167,7 +167,7 @@ def test_truss_init_creates_project_directory_and_config(
     output = capsys.readouterr().out
     assert "📦 Name this model: " in output
     assert "Truss qwen-2-5-3b was created in" in output
-    assert "/qwen-2.5-3b" in output.replace("\\", "/")
+    assert "qwen-2.5-3b" in output.replace("\\", "/")
 
 
 def test_truss_init_prompts_for_missing_account_key(

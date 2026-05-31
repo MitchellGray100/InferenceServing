@@ -591,8 +591,6 @@ python -m poetry run truss push
 ✨ Model qwen-2-5-3b was successfully pushed ✨
 
 🪵 View logs for your deployment at http://127.0.0.1:8000/projects/<project-id>/models/qwen-2-5-3b/logs
-🚰 Attempting to sync truss with remote
-No changes observed, skipping patching.
 👀 Watching for changes to truss...
 ```
 

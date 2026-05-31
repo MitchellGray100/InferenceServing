@@ -436,6 +436,27 @@ def test_inspect_model_readiness_detects_image_pull_failure() -> None:
     assert "ImagePullBackOff" in status["reason"]
 
 
+def test_inspect_model_readiness_ignores_recovered_last_terminated_state() -> None:
+    pod = ready_pod()
+    pod["status"]["container_statuses"] = [
+        {
+            "ready": True,
+            "state": {"running": {}},
+            "last_state": {"terminated": {"reason": "Error", "message": "restarted"}},
+        }
+    ]
+    clients = k8s_client.KubernetesClients(
+        core=FakeCore(pods=[pod]),
+        apps=FakeApps(deployment_status=ready_deployment_status()),
+        autoscaling=FakeHpa(),
+    )
+
+    status = inspect_model_readiness(clients, deployment_payload(), expected_replicas=1)
+
+    assert status["ready"] is True
+    assert status["failed"] is False
+
+
 def test_read_model_logs_returns_one_entry_per_pod() -> None:
     core = FakeCore(pods=[ready_pod("pod-a"), ready_pod("pod-b")])
     clients = k8s_client.KubernetesClients(

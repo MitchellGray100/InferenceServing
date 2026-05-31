@@ -392,6 +392,8 @@ def first_pod_failure_reason(pods: list[Any]) -> str | None:
             if reason in POD_FAILURE_REASONS:
                 detail = f": {message}" if message else ""
                 return f"Pod {pod_name} is waiting with {reason}{detail}"
+            if value_at(status, "ready") is True or value_at(status, "state.running"):
+                continue
             terminated = value_at(status, "last_state.terminated")
             terminated_reason = (
                 value_at(terminated, "reason") if terminated is not None else None

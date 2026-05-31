@@ -20,6 +20,8 @@ from flask import current_app
 
 from app.db.pool import transaction
 from app.db.sql import load_queries
+from app.k8s import client as k8s_client
+from app.k8s import deployment_manager
 from app.services import api_key_service
 from app.utils.errors import ApiError
 from app.utils.validation import require_field, require_json_object, validate_string
@@ -49,7 +51,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
     # path. That keeps inference endpoints OpenAI-compatible.
     identity = api_key_service.authenticate_project_api_key(raw_api_key)
     deployment = get_deployment_for_inference(identity["projectID"], model_name)
-    ensure_deployment_running(deployment)
+    deployment = ensure_deployment_running(deployment)
 
     # vLLM runs behind a Kubernetes ClusterIP Service. MiniTen forwards the
     # original JSON body so vLLM handles generation parameters directly.
@@ -158,7 +160,7 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
 
     identity = api_key_service.authenticate_project_api_key(raw_api_key)
     deployment = get_deployment_for_inference(identity["projectID"], model_name)
-    ensure_deployment_running(deployment)
+    deployment = ensure_deployment_running(deployment)
 
     started = time.perf_counter()
     status_code = 502
@@ -308,19 +310,73 @@ def get_deployment_for_inference(project_id: str, model_name: str) -> dict[str, 
     return row
 
 
-def ensure_deployment_running(deployment: dict[str, Any]) -> None:
+def ensure_deployment_running(deployment: dict[str, Any]) -> dict[str, Any]:
     """Reject inference to deployments that are not ready for traffic."""
-    if deployment["status"] != "running":
+    if deployment["status"] == "running":
+        return deployment
+
+    recovered = recover_running_deployment_from_kubernetes(deployment)
+    if recovered is not None:
+        return recovered
+
+    logger.info(
+        "Rejected inference to non-running model_deployment_id=%s status=%s.",
+        deployment["model_deployment_id"],
+        deployment["status"],
+    )
+    raise ApiError(
+        type="model_not_ready",
+        message="Model deployment is not running.",
+        status_code=409,
+    )
+
+
+def recover_running_deployment_from_kubernetes(
+    deployment: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Promote stale failed/deploying DB state when Kubernetes is now ready."""
+    if deployment["status"] not in {"deploying", "failed"}:
+        return None
+    if int(deployment.get("replicas") or 0) <= 0:
+        return None
+
+    try:
+        clients = k8s_client.create_clients()
+        readiness = deployment_manager.inspect_model_readiness(
+            clients,
+            deployment,
+            expected_replicas=int(deployment.get("replicas") or 0),
+        )
+    except Exception as exc:
         logger.info(
-            "Rejected inference to non-running model_deployment_id=%s status=%s.",
-            deployment["model_deployment_id"],
-            deployment["status"],
+            "Live readiness check failed before inference model_deployment_id=%s: %s.",
+            deployment.get("model_deployment_id"),
+            exc,
         )
-        raise ApiError(
-            type="model_not_ready",
-            message="Model deployment is not running.",
-            status_code=409,
-        )
+        return None
+
+    if not readiness["ready"] or readiness["failed"]:
+        return None
+
+    logger.info(
+        "Recovered stale deployment status from Kubernetes model_deployment_id=%s old_status=%s.",
+        deployment["model_deployment_id"],
+        deployment["status"],
+    )
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("update_model_deployment_status"),
+                {
+                    "model_deployment_id": deployment["model_deployment_id"],
+                    "status": "running",
+                },
+            )
+            row = cur.fetchone()
+    if row is None:
+        deployment["status"] = "running"
+        return deployment
+    return row
 
 
 def classify_upstream_status(status_code: int) -> str | None:

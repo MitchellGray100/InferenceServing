@@ -255,6 +255,28 @@ def test_ensure_deployment_running_rejects_non_running() -> None:
     assert error.value.type == "model_not_ready"
 
 
+def test_ensure_deployment_running_recovers_stale_failed_status(monkeypatch) -> None:
+    stale = deployment_row(status="failed", replicas=1)
+    recovered = deployment_row(status="running", replicas=1)
+    fake = FakeTransaction(fetchones=[recovered])
+
+    monkeypatch.setattr(inference_service, "transaction", fake.transaction)
+    monkeypatch.setattr(inference_service.k8s_client, "create_clients", lambda: object())
+    monkeypatch.setattr(
+        inference_service.deployment_manager,
+        "inspect_model_readiness",
+        lambda clients, deployment, expected_replicas: {
+            "ready": True,
+            "failed": False,
+        },
+    )
+
+    row = inference_service.ensure_deployment_running(stale)
+
+    assert row["status"] == "running"
+    assert fake.cursor.executed[0]["status"] == "running"
+
+
 def test_get_deployment_for_inference_success_and_not_found(monkeypatch) -> None:
     fake = FakeTransaction(fetchones=[deployment_row(), None])
     monkeypatch.setattr(inference_service, "transaction", fake.transaction)

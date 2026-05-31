@@ -608,6 +608,19 @@ def test_retrying_job_does_not_mark_deployment_failed(monkeypatch) -> None:
     assert all(params.get("status") != "failed" for params in fake.cursor.executed)
 
 
+def test_readiness_timeout_does_not_mark_deployment_failed(monkeypatch) -> None:
+    fake = FakeTransaction(fetchone=deployment_row())
+    monkeypatch.setattr(deployment_worker, "transaction", fake.transaction)
+
+    deployment_worker.mark_job_failed_or_retrying(
+        job_row(attempts=1, max_attempts=2),
+        RuntimeError("Timed out waiting for Kubernetes model readiness"),
+    )
+
+    assert fake.cursor.executed[-1]["last_error"].startswith("readiness_timeout:")
+    assert all(params.get("status") != "failed" for params in fake.cursor.executed)
+
+
 class FakeClients:
     pass
 

@@ -277,6 +277,31 @@ def test_get_model_deployment_status_service(monkeypatch) -> None:
     assert response["kubernetes"]["reason"] == "cluster unavailable"
 
 
+def test_get_model_deployment_status_recovers_running_state(monkeypatch) -> None:
+    deployment = deployment_row_fixture()
+    deployment["status"] = "failed"
+    recovered = deployment_row_fixture()
+    recovered["status"] = "running"
+    fake = FakeTransaction(fetchones=[{"role": "viewer"}, deployment, recovered])
+    fake.cursor.fetchall_rows = [deployment_job_row_fixture()]
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        model_deployment_service,
+        "inspect_kubernetes_status",
+        lambda deployment: {
+            "available": True,
+            "reason": None,
+            "readiness": {"ready": True, "failed": False},
+            "recentLogs": [],
+        },
+    )
+
+    response = get_model_deployment_status(USER_ID, PROJECT_ID, MODEL_DEPLOYMENT_ID)
+
+    assert response["modelDeployment"]["status"] == "running"
+    assert fake.cursor.executed[-1][1]["status"] == "running"
+
+
 def test_inspect_kubernetes_status_reports_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(
         model_deployment_service.k8s_client,
@@ -436,6 +461,37 @@ def test_sync_model_deployment_status_route(monkeypatch, client, auth_headers) -
 
     assert response.status_code == 202
     assert response.get_json() == command_response("sync_status")
+
+
+def test_sync_model_deployment_status_reconciles_live_readiness(monkeypatch) -> None:
+    deployment = deployment_row_fixture()
+    deployment["status"] = "failed"
+    job = deployment_job_row_fixture()
+    job["job_type"] = "sync_status"
+    recovered = deployment_row_fixture()
+    recovered["status"] = "running"
+    fake = FakeTransaction(fetchones=[{"role": "owner"}, deployment, job, recovered])
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        model_deployment_service,
+        "inspect_kubernetes_status",
+        lambda deployment: {
+            "available": True,
+            "reason": None,
+            "readiness": {"ready": True, "failed": False},
+            "recentLogs": [],
+        },
+    )
+
+    response = model_deployment_service.sync_model_deployment_status(
+        USER_ID,
+        PROJECT_ID,
+        MODEL_DEPLOYMENT_ID,
+    )
+
+    assert response["modelDeployment"]["status"] == "running"
+    assert response["deploymentJob"]["job_type"] == "sync_status"
+    assert fake.cursor.executed[-1][1]["status"] == "running"
 
 
 def test_delete_model_deployment_route(monkeypatch, client, auth_headers) -> None:

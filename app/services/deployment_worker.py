@@ -621,17 +621,20 @@ def mark_job_failed_or_retrying(job: dict[str, Any], exc: Exception) -> None:
                     release_job_lease_with_cursor(cur, job)
                     return
 
+                mark_deployment_failed = permanent_failure and deployment_failure_is_terminal(
+                    failure
+                )
                 deployment = (
                     update_deployment_status_with_cursor(
                         cur,
                         job["model_deployment_id"],
                         "failed",
                     )
-                    if permanent_failure
+                    if mark_deployment_failed
                     else current
                 )
 
-            if deployment is not None and permanent_failure:
+            if deployment is not None and permanent_failure and mark_deployment_failed:
                 create_model_event_with_cursor(
                     cur,
                     deployment,
@@ -677,6 +680,11 @@ def fetch_deployment_for_job_with_cursor(
 def should_fail_permanently(job: dict[str, Any]) -> bool:
     """Return whether the next failed attempt should exhaust the job."""
     return int(job["attempts"]) + 1 >= int(job["max_attempts"])
+
+
+def deployment_failure_is_terminal(failure: dict[str, str]) -> bool:
+    """Return whether a failed job should mark the deployment itself failed."""
+    return failure["category"] != "readiness_timeout"
 
 
 def should_project_cleanup_fail_permanently(job: dict[str, Any]) -> bool:

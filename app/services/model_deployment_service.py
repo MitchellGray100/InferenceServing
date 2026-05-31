@@ -308,6 +308,7 @@ def get_model_deployment_status(
             jobs = cur.fetchall()
 
     kubernetes = inspect_kubernetes_status(deployment)
+    deployment = reconcile_deployment_status_from_kubernetes(deployment, kubernetes)
     latest_job = serialize_deployment_job(jobs[0]) if jobs else None
     return {
         "modelDeployment": serialize_model_deployment(deployment),
@@ -315,6 +316,42 @@ def get_model_deployment_status(
         "recentDeploymentJobs": [serialize_deployment_job(row) for row in jobs],
         "kubernetes": kubernetes,
     }
+
+
+def reconcile_deployment_status_from_kubernetes(
+    deployment: dict[str, Any],
+    kubernetes: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist recovered running state observed from live Kubernetes readiness."""
+    if deployment["status"] not in {"deploying", "failed"}:
+        return deployment
+    if int(deployment.get("replicas") or 0) <= 0:
+        return deployment
+
+    readiness = kubernetes.get("readiness")
+    if not readiness or not readiness.get("ready") or readiness.get("failed"):
+        return deployment
+
+    logger.info(
+        "Reconciling model status to running from live Kubernetes readiness model_deployment_id=%s old_status=%s.",
+        deployment["model_deployment_id"],
+        deployment["status"],
+    )
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                queries.get("update_model_deployment_status"),
+                {
+                    "model_deployment_id": deployment["model_deployment_id"],
+                    "status": "running",
+                },
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        deployment["status"] = "running"
+        return deployment
+    return row
 
 
 def list_model_logs(
@@ -578,7 +615,7 @@ def sync_model_deployment_status(
     project_id: Any,
     model_deployment_id: Any,
 ) -> dict[str, Any]:
-    """Enqueue a job that reconciles DB status from live Kubernetes state."""
+    """Reconcile status from live Kubernetes now and enqueue a worker sync job."""
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
     canonical_model_deployment_id = validate_uuid(model_deployment_id, "modelDeploymentID")
@@ -602,6 +639,8 @@ def sync_model_deployment_status(
                 build_job_payload("sync_status", deployment),
             )
 
+    kubernetes = inspect_kubernetes_status(deployment)
+    deployment = reconcile_deployment_status_from_kubernetes(deployment, kubernetes)
     return {
         "modelDeployment": serialize_model_deployment(deployment),
         "deploymentJob": serialize_deployment_job(job),

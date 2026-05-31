@@ -31,6 +31,7 @@ queries = load_queries()
 logger = logging.getLogger(__name__)
 VLLM_PORT = 8000
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+LOCAL_PORT_FORWARD_ATTEMPTS = 3
 
 
 def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
@@ -66,12 +67,7 @@ def chat_completions(raw_api_key: str, body: Any) -> tuple[dict[str, Any], int]:
             deployment["model_deployment_id"],
             model_name,
         )
-        with vllm_request_url(deployment, CHAT_COMPLETIONS_PATH) as url:
-            upstream_response = requests.post(
-                url,
-                json=data,
-                timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
-            )
+        upstream_response = post_vllm_request_with_retries(deployment, data)
         status_code = upstream_response.status_code
         response_body = parse_upstream_json(upstream_response)
         error_type = classify_upstream_status(status_code)
@@ -170,14 +166,10 @@ def chat_completions_stream(raw_api_key: str, body: Any) -> tuple[Iterator[bytes
     try:
         # The port-forward must stay open for the whole response iterator, not
         # just until `requests.post` returns the response headers.
-        url = request_url_context.enter_context(
-            vllm_request_url(deployment, CHAT_COMPLETIONS_PATH)
-        )
-        upstream_response = requests.post(
-            url,
-            json=data,
-            timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
-            stream=True,
+        upstream_response = post_vllm_stream_request_with_retries(
+            deployment,
+            data,
+            request_url_context,
         )
         status_code = upstream_response.status_code
         error_type = classify_upstream_status(status_code)
@@ -428,6 +420,70 @@ def vllm_request_url(deployment: dict[str, Any], path: str) -> Iterator[str]:
         return
 
     yield build_vllm_url(deployment, path)
+
+
+def post_vllm_request_with_retries(
+    deployment: dict[str, Any],
+    data: dict[str, Any],
+) -> requests.Response:
+    """POST to vLLM, retrying transient local port-forward setup failures."""
+    last_exc: requests.RequestException | None = None
+    for attempt in range(1, upstream_request_attempts() + 1):
+        try:
+            with vllm_request_url(deployment, CHAT_COMPLETIONS_PATH) as url:
+                return requests.post(
+                    url,
+                    json=data,
+                    timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
+                )
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= upstream_request_attempts():
+                raise
+            logger.info(
+                "Retrying local vLLM request after port-forward failure model_deployment_id=%s attempt=%s error=%s.",
+                deployment.get("model_deployment_id"),
+                attempt,
+                exc.__class__.__name__,
+            )
+    raise last_exc or requests.ConnectionError("vLLM request failed")
+
+
+def post_vllm_stream_request_with_retries(
+    deployment: dict[str, Any],
+    data: dict[str, Any],
+    request_url_context: contextlib.ExitStack,
+) -> requests.Response:
+    """Open a streaming vLLM request, retrying before any stream is returned."""
+    last_exc: requests.RequestException | None = None
+    for attempt in range(1, upstream_request_attempts() + 1):
+        try:
+            url = request_url_context.enter_context(
+                vllm_request_url(deployment, CHAT_COMPLETIONS_PATH)
+            )
+            return requests.post(
+                url,
+                json=data,
+                timeout=current_app.config["INFERENCE_UPSTREAM_TIMEOUT_SECONDS"],
+                stream=True,
+            )
+        except requests.RequestException as exc:
+            request_url_context.close()
+            last_exc = exc
+            if attempt >= upstream_request_attempts():
+                raise
+            logger.info(
+                "Retrying local streaming vLLM request after port-forward failure model_deployment_id=%s attempt=%s error=%s.",
+                deployment.get("model_deployment_id"),
+                attempt,
+                exc.__class__.__name__,
+            )
+    raise last_exc or requests.ConnectionError("Streaming vLLM request failed")
+
+
+def upstream_request_attempts() -> int:
+    """Return request attempts, adding retries only for local auto port-forward."""
+    return LOCAL_PORT_FORWARD_ATTEMPTS if should_auto_port_forward() else 1
 
 
 @contextlib.contextmanager

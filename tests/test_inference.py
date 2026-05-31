@@ -413,6 +413,46 @@ def test_chat_completions_records_upstream_http_errors(monkeypatch, app) -> None
     assert records[0]["error_type"] == "upstream_4xx"
 
 
+def test_chat_completions_retries_transient_local_forward_errors(monkeypatch, app) -> None:
+    records = []
+    calls = []
+    monkeypatch.setattr(
+        inference_service.api_key_service,
+        "authenticate_project_api_key",
+        lambda raw_key: {"apiKeyID": API_KEY_ID, "projectID": PROJECT_ID},
+    )
+    monkeypatch.setattr(
+        inference_service,
+        "get_deployment_for_inference",
+        lambda project_id, model_name: deployment_row(),
+    )
+    monkeypatch.setattr(inference_service, "upstream_request_attempts", lambda: 2)
+
+    def post(url, json, timeout):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.ConnectionError("port-forward closed")
+        return FakeResponse({"id": "chatcmpl_retry"}, 200)
+
+    monkeypatch.setattr(inference_service.requests, "post", post)
+    monkeypatch.setattr(
+        inference_service,
+        "record_inference_request",
+        lambda **kwargs: records.append(kwargs),
+    )
+
+    with app.app_context():
+        body, status = inference_service.chat_completions(
+            "raw-key",
+            {"model": "qwen-small-prod", "messages": []},
+        )
+
+    assert status == 200
+    assert body["id"] == "chatcmpl_retry"
+    assert len(calls) == 2
+    assert records[0]["status_code"] == 200
+
+
 def test_chat_completions_stream_proxies_chunks_and_logs_request(monkeypatch, app) -> None:
     records = []
     monkeypatch.setattr(

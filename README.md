@@ -1031,11 +1031,13 @@ app/
   security/     Passwords, tokens, API key hashing
   templates/    Dashboard templates
   static/       Dashboard CSS/JS
+  utils/        Errors, logging, time, validation helpers
 
 migrations/     Raw SQL migrations
 scripts/        Local setup, dashboard, smoke tests
 tests/          Unit and smoke-style tests
 docs/           Diagrams and design notes
+examples/       Demo .ipynb files
 ```
 
 ## Notes On Data

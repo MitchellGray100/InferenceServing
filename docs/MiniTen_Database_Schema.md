@@ -18,6 +18,7 @@ projects
 project_members
 model_deployments
 api_keys
+account_api_keys
 inference_requests
 model_events
 deployment_jobs
@@ -51,6 +52,7 @@ Important design rules:
 - Model deployments are identified by a project-local deployment name.
 - The Hugging Face model ID is stored as metadata and passed to vLLM.
 - API keys are project-scoped.
+- Account API keys are user-scoped for automation such as Truss-style deploys.
 - Raw API keys are never stored.
 - Request prompts and model responses are not stored.
 - Kubernetes state is mirrored into application status fields, but Kubernetes remains the source of truth for live pod/replica state.
@@ -458,7 +460,68 @@ CREATE TABLE api_keys (
 
 ---
 
-# 6. `inference_requests`
+# 6. `account_api_keys`
+
+## Purpose
+
+Stores user-scoped account API keys used for automation such as MiniTen's
+Truss-style `truss` command.
+
+This table answers:
+
+> Which user is this automation key allowed to act as?
+
+Account API keys are used for control-plane automation. They are not accepted
+for inference requests.
+
+## Table Definition
+
+```sql
+CREATE TABLE account_api_keys (
+  account_api_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at TIMESTAMP,
+  revoked_at TIMESTAMP,
+
+  CONSTRAINT uq_account_api_keys_key_hash UNIQUE(key_hash)
+);
+
+CREATE UNIQUE INDEX uq_account_api_keys_user_active_name
+ON account_api_keys(user_id, name)
+WHERE revoked_at IS NULL;
+```
+
+## Columns
+
+| Column | Type | Required | Purpose |
+|---|---:|---:|---|
+| `account_api_key_id` | `UUID` | Yes | Primary key for the account API key. |
+| `user_id` | `UUID` | Yes | User this key authenticates as. |
+| `name` | `TEXT` | Yes | Human-readable key name. |
+| `key_prefix` | `TEXT` | Yes | Visible prefix shown in dashboard. Not secret. |
+| `key_hash` | `TEXT` | Yes | Server-secret HMAC of the full key. Raw key is never stored. |
+| `created_at` | `TIMESTAMP` | Yes | Time the key was created. |
+| `last_used_at` | `TIMESTAMP` | No | Last time the key was used. |
+| `revoked_at` | `TIMESTAMP` | No | Time the key was revoked. Null means active. |
+
+## Important Notes
+
+- Account API keys are user-scoped, not project-scoped.
+- The raw account API key is shown only once.
+- Deleting a user deletes their account API keys through `ON DELETE CASCADE`.
+- Active key names are unique per user, but a revoked key name can be reused.
+- Account API keys are used by `truss login`, `truss init`, `truss push`, and `truss watch`.
+
+---
+
+# 7. `inference_requests`
 
 ## Purpose
 
@@ -517,7 +580,7 @@ CREATE TABLE inference_requests (
 
 ---
 
-# 7. `model_events`
+# 8. `model_events`
 
 ## Purpose
 
@@ -610,7 +673,7 @@ model_deleted
 ---
 
 
-# 8. `project_cleanup_jobs`
+# 9. `project_cleanup_jobs`
 
 ## Purpose
 
@@ -674,7 +737,7 @@ CREATE TABLE project_cleanup_jobs (
   PVCs, and Secrets inside that project namespace.
 
 ---
-# 9. `deployment_jobs`
+# 10. `deployment_jobs`
 
 ## Purpose
 
@@ -1065,6 +1128,12 @@ ON api_keys(project_id);
 CREATE INDEX idx_api_keys_key_prefix
 ON api_keys(key_prefix);
 
+CREATE INDEX idx_account_api_keys_user_id
+ON account_api_keys(user_id);
+
+CREATE INDEX idx_account_api_keys_key_prefix
+ON account_api_keys(key_prefix);
+
 CREATE INDEX idx_inference_requests_project_id
 ON inference_requests(project_id);
 
@@ -1326,6 +1395,26 @@ CREATE TABLE api_keys (
   CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)
 );
 
+CREATE TABLE account_api_keys (
+  account_api_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at TIMESTAMP,
+  revoked_at TIMESTAMP,
+
+  CONSTRAINT uq_account_api_keys_key_hash UNIQUE(key_hash)
+);
+
+CREATE UNIQUE INDEX uq_account_api_keys_user_active_name
+ON account_api_keys(user_id, name)
+WHERE revoked_at IS NULL;
+
 CREATE TABLE inference_requests (
   inference_request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
@@ -1478,6 +1567,7 @@ This schema supports the MiniTen MVP features:
 - multi-user authentication
 - project membership
 - project-scoped API keys
+- user-scoped account API keys for Truss-style automation
 - named model deployments
 - Hugging Face model IDs
 - Kubernetes resource metadata

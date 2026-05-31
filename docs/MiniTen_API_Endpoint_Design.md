@@ -10,7 +10,7 @@ All public API endpoints are versioned under:
 
 ## API Categories
 
-MiniTen has nine API groups:
+MiniTen has eleven API groups:
 
 ```text
 Health API
@@ -19,7 +19,9 @@ Auth API
 Projects API
 Project Members API
 Project API Keys API
+Account API Keys API
 Model Deployment API
+Truss-Style Deploy API
 Analytics API
 Inference API
 ```
@@ -32,7 +34,9 @@ Inference API
 | Projects API | Create, list, inspect, and delete projects |
 | Project Members API | Manage users inside a project |
 | Project API Keys API | Create/revoke project-scoped inference API keys |
+| Account API Keys API | Create/revoke user-scoped automation API keys |
 | Model Deployment API | Deploy, inspect, update, start, stop, delete, and log models |
+| Truss-Style Deploy API | Initialize projects and deploy models from `truss` YAML |
 | Analytics API | View usage metrics, request history, and lifecycle events |
 | Inference API | Call deployed models through OpenAI-compatible endpoints |
 
@@ -80,6 +84,28 @@ GET /v1/models
 ```
 
 The project API key determines the project. The `model` field in the request body determines which named deployment inside that project receives the request.
+
+### Account API key
+
+Used for user-level automation, including the MiniTen `truss` command.
+
+Header:
+
+```http
+Authorization: Bearer <account_api_key>
+```
+
+Used for:
+
+```text
+POST /v1/truss/projects/init
+POST /v1/truss/models
+PATCH /v1/truss/models
+```
+
+Account API keys identify a user, not a project. The Truss-style endpoints use
+the account key's user to create or look up projects and to verify project
+membership before deploying a model.
 
 ---
 
@@ -1199,15 +1225,185 @@ api_keys
 
 ---
 
-# 6. Model Deployment API
+# 6. Account API Keys API
+
+Account API keys are user-scoped credentials used for automation that needs to
+act as a MiniTen user. The Truss-style CLI uses these keys to initialize
+projects and deploy model YAML.
+
+Account API keys are not accepted for inference requests. Project API keys are
+still required for `/v1/chat/completions` and `/v1/models`.
+
+The raw account API key is only returned once on creation.
+
+## 6.1 Create account API key
+
+```http
+POST /v1/account/api-keys
+```
+
+### Purpose
+
+Creates a user-scoped account API key.
+
+Used by:
+
+```text
+Account dashboard page
+CLI account-api-keys create command
+Truss-style login setup
+```
+
+### Auth
+
+User auth token required.
+
+### Request
+
+```json
+{
+  "name": "truss-local"
+}
+```
+
+### Behavior
+
+```text
+1. Verify the user auth token.
+2. Generate raw account API key.
+3. Derive key_prefix from raw key.
+4. Hash raw key with server-secret HMAC.
+5. Store key_prefix and key_hash.
+6. Return raw account API key once.
+```
+
+### Response
+
+```json
+{
+  "accountApiKeyID": "e6ed8b20-4cf3-4f32-8e3a-ea3e0a164ac2",
+  "userID": "6f9452d0-74f5-4776-a12f-c93eb15220f3",
+  "name": "truss-local",
+  "key_prefix": "mt_account_x7k2",
+  "api_key": "mt_account_x7k2_8sdf9as7df0qwer...",
+  "created_at": "2026-05-31T12:00:00Z",
+  "last_used_at": null,
+  "revoked_at": null
+}
+```
+
+### Tables used
+
+```text
+account_api_keys
+users
+```
+
+## 6.2 List account API keys
+
+```http
+GET /v1/account/api-keys
+```
+
+### Purpose
+
+Lists account API key metadata for the current user.
+
+Used by:
+
+```text
+Account dashboard page
+CLI account-api-keys list command
+```
+
+### Auth
+
+User auth token required.
+
+### Response
+
+```json
+{
+  "account_api_keys": [
+    {
+      "accountApiKeyID": "e6ed8b20-4cf3-4f32-8e3a-ea3e0a164ac2",
+      "name": "truss-local",
+      "key_prefix": "mt_account_x7k2",
+      "created_at": "2026-05-31T12:00:00Z",
+      "last_used_at": null,
+      "revoked_at": null
+    }
+  ]
+}
+```
+
+### Important Security Note
+
+Do not return:
+
+```text
+raw account API key
+key_hash
+```
+
+### Tables used
+
+```text
+account_api_keys
+```
+
+## 6.3 Revoke account API key
+
+```http
+DELETE /v1/account/api-keys/{accountApiKeyID}
+```
+
+### Purpose
+
+Revokes an account API key.
+
+Used by:
+
+```text
+Account dashboard page
+CLI account-api-keys revoke command
+```
+
+### Auth
+
+User auth token required.
+
+### Behavior
+
+```text
+1. Verify the key belongs to the current user.
+2. Set revoked_at = now().
+3. Preserve the row for key metadata and audit history.
+```
+
+### Response
+
+```json
+{
+  "revoked": true
+}
+```
+
+### Tables used
+
+```text
+account_api_keys
+```
+
+---
+
+# 7. Model Deployment API
 
 The Model Deployment API manages model infrastructure.
 
 These endpoints are for creating, updating, starting, stopping, deleting, and inspecting model deployments.
 
 They do not send inference prompts to models. Inference happens through `/v1/chat/completions`.
-
-header. The same key with the same request replays the original response, while
 
 User-controlled deployment settings are intentionally narrow in the MVP.
 Clients provide the model name, Hugging Face model ID, replica/autoscaling
@@ -1220,7 +1416,7 @@ both `model_deployments` and `deployment_jobs`. The worker skips jobs whose
 generation is older than the current deployment generation, which prevents stale
 commands from applying after a newer desired state has been requested.
 
-## 6.1 Deploy model
+## 7.1 Deploy model
 
 ```http
 POST /v1/projects/{projectID}/models
@@ -1353,7 +1549,7 @@ The Deployment Worker creates Namespace, PVC, Deployment, Service, HPA, and Secr
 
 ---
 
-## 6.2 List models
+## 7.2 List models
 
 ```http
 GET /v1/projects/{projectID}/models
@@ -1407,7 +1603,7 @@ project_members
 
 ---
 
-## 6.3 Get model
+## 7.3 Get model
 
 ```http
 GET /v1/projects/{projectID}/models/{modelDeploymentID}
@@ -1477,7 +1673,7 @@ project_members
 
 ---
 
-## 6.4 List model deployment jobs
+## 7.4 List model deployment jobs
 
 ```http
 GET /v1/projects/{projectID}/models/{modelDeploymentID}/jobs
@@ -1545,7 +1741,7 @@ deployment_jobs
 
 ---
 
-## 6.4.1 Get model status
+## 7.4.1 Get model status
 
 ```http
 GET /v1/projects/{projectID}/models/{modelDeploymentID}/status
@@ -1635,7 +1831,7 @@ deployment_jobs
 
 ---
 
-## 6.5 Scale model
+## 7.5 Scale model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/scale
@@ -1719,7 +1915,7 @@ The Deployment Worker patches Deployment and HPA resources.
 
 ---
 
-## 6.5.1 Update model settings
+## 7.5.1 Update model settings
 
 ```http
 PATCH /v1/projects/{projectID}/models/{modelDeploymentID}
@@ -1763,7 +1959,7 @@ the managed CPU or GPU vLLM image from `gpu_count`, increments
 
 ---
 
-## 6.5.2 Sync model status
+## 7.5.2 Sync model status
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/sync
@@ -1775,7 +1971,7 @@ Service, and Pod readiness and updates MiniTen status to `running`, `stopped`,
 
 ---
 
-## 6.6 Start model
+## 7.6 Start model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/start
@@ -1855,7 +2051,7 @@ The Deployment Worker scales the Deployment up and restores HPA settings if need
 
 ---
 
-## 6.7 Stop model
+## 7.7 Stop model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/stop
@@ -1930,7 +2126,7 @@ The Deployment Worker handles HPA first, then scales the Deployment to zero.
 
 ---
 
-## 6.8 Hard restart model
+## 7.8 Hard restart model
 
 ```http
 POST /v1/projects/{projectID}/models/{modelDeploymentID}/hard-restart
@@ -1993,7 +2189,7 @@ Service, HPA, Secret, and related manifests. The model cache PVC is retained.
 
 ---
 
-## 6.9 Delete model
+## 7.9 Delete model
 
 ```http
 DELETE /v1/projects/{projectID}/models/{modelDeploymentID}
@@ -2061,7 +2257,7 @@ The Deployment Worker deletes HPA, Service, Deployment, Secret, and other deploy
 
 ---
 
-## 6.10 Get model logs
+## 7.10 Get model logs
 
 ```http
 GET /v1/projects/{projectID}/models/{modelName}/logs
@@ -2127,13 +2323,281 @@ Read pod logs
 
 ---
 
-# 7. Analytics API
+# 8. Truss-Style Deploy API
+
+These endpoints support MiniTen's lightweight `truss` command. They are
+designed for a local YAML workflow that resembles Truss while reusing MiniTen's
+existing project and model deployment pipeline.
+
+These endpoints use account API keys, not project API keys. The account API key
+identifies the user. MiniTen then checks that user's project membership before
+deploying.
+
+## 8.1 Initialize project
+
+```http
+POST /v1/truss/projects/init
+```
+
+### Purpose
+
+Creates a project by name if it does not already exist for the account API key's
+user. If the project exists and the user is already a member, MiniTen returns
+the existing project.
+
+Used by:
+
+```text
+truss init <project-name>
+```
+
+### Auth
+
+Account API key required.
+
+### Request
+
+```json
+{
+  "name": "qwen-2.5-3b"
+}
+```
+
+### Behavior
+
+```text
+1. Validate the account API key.
+2. Look up the key's user.
+3. Find a project with the requested name where the user is a member.
+4. If found, return it.
+5. Otherwise create the project and add the user as owner.
+```
+
+### Response
+
+```json
+{
+  "project": {
+    "projectID": "9f943ed3-881e-4f49-b9df-f19eb151c8c1",
+    "name": "qwen-2.5-3b",
+    "slug": "qwen-2-5-3b",
+    "k8s_namespace": "miniten-qwen-2-5-3b"
+  }
+}
+```
+
+### Tables used
+
+```text
+account_api_keys
+users
+projects
+project_members
+```
+
+## 8.2 Push model from YAML
+
+```http
+POST /v1/truss/models
+```
+
+### Purpose
+
+Deploys a model into a project selected by name. The `truss push` command reads
+`config.yaml` and sends the current directory name as `project_name`.
+
+Used by:
+
+```text
+truss push
+```
+
+### Auth
+
+Account API key required.
+
+### Request
+
+```json
+{
+  "project_name": "qwen-2.5-3b",
+  "deployment": {
+    "name": "small-llm",
+    "model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "replicas": 1,
+    "resources": {
+      "cpu_request": "2",
+      "cpu_limit": "4",
+      "memory_request": "4Gi",
+      "memory_limit": "12Gi",
+      "gpu_count": 0
+    },
+    "vllm": {
+      "dtype": "auto",
+      "max_model_len": 512
+    },
+    "autoscaling": {
+      "enabled": false
+    }
+  }
+}
+```
+
+### Behavior
+
+```text
+1. Validate the account API key.
+2. Look up the project by project_name for the key's user.
+3. Return project_not_found if the user cannot access a matching project.
+4. Verify the user has owner or member permissions.
+5. Validate deployment settings using the normal model deployment rules.
+6. Create model_deployments row with status = deploying.
+7. Create deployment_jobs row with job_type = deploy_model.
+8. Return the deployment object, deployment job, and project.
+```
+
+### Response
+
+The response mirrors `POST /v1/projects/{projectID}/models` and also includes
+the resolved project.
+
+```json
+{
+  "project": {
+    "projectID": "9f943ed3-881e-4f49-b9df-f19eb151c8c1",
+    "name": "qwen-2.5-3b"
+  },
+  "deployment": {
+    "modelDeploymentID": "8e6cb4dd-8c83-492b-b095-e7f2c473a879",
+    "name": "small-llm",
+    "status": "deploying"
+  },
+  "deploymentJob": {
+    "deploymentJobID": "3ef7d993-cb61-4392-b36b-2ed2e1d88af1",
+    "job_type": "deploy_model",
+    "status": "queued"
+  }
+}
+```
+
+### Errors
+
+```text
+401 unauthorized: missing, invalid, or revoked account API key
+403 forbidden: user does not have deploy permissions in the project
+404 project_not_found: project_name does not exist for this user
+409 conflict: deployment name already exists in the project
+422 validation_error: config.yaml contains invalid deployment settings
+```
+
+### Tables used
+
+```text
+account_api_keys
+projects
+project_members
+model_deployments
+deployment_jobs
+```
+
+## 8.3 Update model from YAML
+
+```http
+PATCH /v1/truss/models
+```
+
+### Purpose
+
+Updates an existing model deployment selected by `project_name` and
+`deployment.name`. The `truss watch` command calls this endpoint when
+`config.yaml` changes.
+
+Used by:
+
+```text
+truss watch
+truss push, after the initial deploy, while watching for file changes
+```
+
+### Auth
+
+Account API key required.
+
+### Request
+
+The request shape matches `POST /v1/truss/models`.
+
+```json
+{
+  "project_name": "qwen-2.5-3b",
+  "deployment": {
+    "name": "qwen-2-5-3b",
+    "model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "vllm": {
+      "max_model_len": 1024
+    }
+  }
+}
+```
+
+### Behavior
+
+```text
+1. Validate the account API key.
+2. Look up the project by project_name for the key's user.
+3. Look up the existing model deployment by deployment.name.
+4. Validate and merge changed deployment settings.
+5. Increment desired_generation.
+6. Create deployment_jobs row with job_type = update_model.
+7. Return the updated deployment object, deployment job, and project.
+```
+
+### Response
+
+```json
+{
+  "modelDeployment": {
+    "modelDeploymentID": "8e6cb4dd-8c83-492b-b095-e7f2c473a879",
+    "name": "qwen-2-5-3b",
+    "status": "deploying"
+  },
+  "deploymentJob": {
+    "deploymentJobID": "3ef7d993-cb61-4392-b36b-2ed2e1d88af1",
+    "job_type": "update_model",
+    "status": "queued"
+  }
+}
+```
+
+### Errors
+
+```text
+401 unauthorized: missing, invalid, or revoked account API key
+403 forbidden: user does not have deploy permissions in the project
+404 project_not_found: project_name does not exist for this user
+404 model_deployment_not_found: deployment.name does not exist in the project
+422 validation_error: config.yaml contains invalid deployment settings
+```
+
+### Tables used
+
+```text
+account_api_keys
+projects
+project_members
+model_deployments
+deployment_jobs
+```
+
+---
+
+# 9. Analytics API
 
 The Analytics API is for usage, metrics, request history, and model events.
 
 These endpoints do not modify infrastructure.
 
-## 7.1 Project analytics overview
+## 9.1 Project analytics overview
 
 ```http
 GET /v1/projects/{projectID}/analytics/overview
@@ -2197,7 +2661,7 @@ inference_requests
 
 ---
 
-## 7.2 Model metrics
+## 9.2 Model metrics
 
 ```http
 GET /v1/projects/{projectID}/analytics/models/{modelName}/metrics
@@ -2265,7 +2729,7 @@ inference_requests
 
 ---
 
-## 7.3 Model request history
+## 9.3 Model request history
 
 ```http
 GET /v1/projects/{projectID}/analytics/models/{modelName}/requests
@@ -2354,7 +2818,7 @@ inference_requests
 
 ---
 
-## 7.4 Model events
+## 9.4 Model events
 
 ```http
 GET /v1/projects/{projectID}/analytics/models/{modelName}/events
@@ -2422,7 +2886,7 @@ model_events
 
 ---
 
-# 8. Inference API
+# 10. Inference API
 
 The Inference API is the public OpenAI-compatible API used by external applications.
 
@@ -2430,7 +2894,7 @@ These endpoints use project API keys, not dashboard user tokens.
 
 The project comes from the API key. The model comes from the request body.
 
-## 8.1 Chat completions
+## 10.1 Chat completions
 
 ```http
 POST /v1/chat/completions
@@ -2588,7 +3052,7 @@ Forward HTTP request to model Service
 
 ---
 
-## 8.2 List available inference models
+## 10.2 List available inference models
 
 ```http
 GET /v1/models

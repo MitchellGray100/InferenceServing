@@ -2,7 +2,7 @@ PYTHON ?= python
 POETRY ?= $(PYTHON) -m poetry
 WORKER_REPLICAS ?= 2
 
-.PHONY: install setup-env setup-web open-dashboard clean-env start-kind stop-kind clean-kind clean-all install-metrics-server migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test test-local-apis test-local-k8s test-local-vllm test-local-vllm-gpu tests coverage lint compile clean
+.PHONY: install setup-env setup-web open-dashboard clean-env start-kind stop-kind clean-kind clean-all install-metrics-server migrate run-api run-api-gunicorn run-worker run-worker-dry-run start-worker-real-k8s test test-local-apis test-local-k8s test-local-vllm test-local-truss-vllm test-local-vllm-gpu tests coverage lint compile clean
 
 install:
 	$(PYTHON) -m pip install --upgrade pip poetry
@@ -88,6 +88,10 @@ test-local-vllm:
 	VLLM_DEVICE=$${MINITEN_VLLM_TEST_DEVICE:-cpu} $(MAKE) start-worker-real-k8s
 	$(POETRY) run python scripts/smoke_test_local_vllm.py
 
+test-local-truss-vllm:
+	VLLM_DEVICE=$${MINITEN_VLLM_TEST_DEVICE:-cpu} $(MAKE) start-worker-real-k8s
+	$(POETRY) run python scripts/smoke_test_local_truss_vllm.py
+
 test-local-vllm-gpu:
 	$(POETRY) run python scripts/check_local_gpu_k8s.py
 	$(MAKE) install-metrics-server
@@ -102,6 +106,7 @@ tests:
 	$(MAKE) test-local-apis
 	$(MAKE) test-local-k8s
 	$(MAKE) test-local-vllm
+	$(MAKE) test-local-truss-vllm
 
 coverage:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(POETRY) run coverage run -m pytest

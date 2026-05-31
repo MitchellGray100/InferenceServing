@@ -153,6 +153,7 @@ make test
 make test-local-apis
 make test-local-k8s
 make test-local-vllm
+make test-local-truss-vllm
 make test-local-vllm-gpu
 make tests
 make coverage
@@ -183,8 +184,9 @@ What the important targets do:
 | `make test-local-apis` | Runs API smoke tests against a running local API. |
 | `make test-local-k8s` | Tests real Kubernetes resource creation/deletion with a lightweight smoke worker. |
 | `make test-local-vllm` | Deploys a real CPU vLLM pod and calls chat completions. |
+| `make test-local-truss-vllm` | Runs the real CPU vLLM smoke path through `truss login`, `truss init`, and `truss push`. |
 | `make test-local-vllm-gpu` | Runs the GPU vLLM smoke path when Kubernetes exposes `nvidia.com/gpu`. |
-| `make tests` | Runs `make test`, `make test-local-apis`, `make test-local-k8s`, and `make test-local-vllm`. |
+| `make tests` | Runs `make test`, `make test-local-apis`, `make test-local-k8s`, `make test-local-vllm`, and `make test-local-truss-vllm`. |
 | `make lint` | Runs Ruff. |
 
 ## Web Dashboard Workflow
@@ -321,10 +323,12 @@ Example notebooks are available in `examples/minitendemo.ipynb` and
 ![MiniTen account page](docs/images/AccountPage.png)
 
 The Account page shows account metadata and contains the account deletion
-control. Account deletion is separated from project management so destructive
-account-level actions are not mixed into the project list. Deleting an account
-also deletes projects where that account is the only owner; assign another
-owner first if a project should remain after the account is removed.
+control. It also manages account API keys for user-level automation such as
+[Truss](https://github.com/basetenlabs/truss)-style commands. Account deletion
+is separated from project management so destructive account-level actions are
+not mixed into the project list. Deleting an account deletes its account API
+keys and also deletes projects where that account is the only owner; assign
+another owner first if a project should remain after the account is removed.
 
 ## CLI
 
@@ -383,6 +387,10 @@ command reference:
   api-keys list <project-id>
   api-keys use <project-api-key>
   api-keys revoke <project-id> <api-key-id>
+
+  account-api-keys create <name>
+  account-api-keys list
+  account-api-keys revoke <account-api-key-id>
 
   models deploy <project-id> --name <name> --model-id <hf-model-id>
       [--replicas <n>] [--cpu-request <value>] [--cpu-limit <value>]
@@ -469,6 +477,14 @@ python -m poetry run miniten api-keys create <project-id> local-dev --use
 python -m poetry run miniten api-keys list <project-id>
 ```
 
+Create an account API key for user-level automation:
+
+```bash
+python -m poetry run miniten account-api-keys create truss-local
+python -m poetry run miniten account-api-keys list
+python -m poetry run miniten account-api-keys revoke <account-api-key-id>
+```
+
 Send inference:
 
 ```bash
@@ -489,6 +505,115 @@ python -m poetry run miniten inference chat \
   --temperature 0 \
   --stream
 ```
+
+### Truss-Style YAML Deploy
+
+MiniTen also ships a small `truss` command for a MiniTen-compatible YAML
+workflow. It uses account API keys because `truss init` can create projects.
+
+Command summary:
+
+| Command | Purpose |
+|---|---|
+| `truss login [--api-key <key>] [--base-url <url>]` | Stores a MiniTen account API key for later Truss-style commands. Without `--api-key`, it always prompts for the key. |
+| `truss init <project-name> [--model-name <name>]` | Creates or reuses a MiniTen project, prompts for a deployment `model_name` when needed, and writes `<project-name>/config.yaml`. |
+| `truss push [--config <path>] [--no-watch] [--poll-interval <seconds>]` | Deploys the current directory's `config.yaml` and watches for config changes by default. |
+| `truss watch [--config <path>] [--poll-interval <seconds>]` | Reattaches to an existing Truss-style directory and queues update jobs when `config.yaml` changes. |
+
+Log in with a MiniTen account API key:
+
+```bash
+python -m poetry run truss login
+💻 Let's add a MiniTen remote!
+🤫 Quietly paste your API_KEY:
+```
+
+`truss login` prompts unless `--api-key` is provided. You can pass the account
+API key and API URL non-interactively:
+
+```bash
+python -m poetry run truss login \
+  --api-key "<miniten-account-api-key>" \
+  --base-url http://127.0.0.1:8000
+```
+
+Create or initialize a project directory. If the project already exists and
+you are a member, MiniTen reuses it. Either way, the command writes
+`qwen-2.5-3b/config.yaml`.
+
+```bash
+python -m poetry run truss init qwen-2.5-3b
+📦 Name this model: qwen-2-5-3b
+Truss qwen-2-5-3b was created in ~/qwen-2.5-3b
+cd qwen-2.5-3b
+```
+
+Edit `config.yaml`. The project is inferred from the current directory name, so
+the file does not need a project ID.
+
+```yaml
+model_name: qwen-2-5-3b
+model_id: HuggingFaceTB/SmolLM2-135M-Instruct
+replicas: 1
+
+resources:
+  cpu_request: "2"
+  cpu_limit: "4"
+  memory_request: "4Gi"
+  memory_limit: "12Gi"
+  gpu_count: 0
+
+vllm:
+  dtype: auto
+  max_model_len: 512
+
+autoscaling:
+  enabled: false
+```
+
+Deploy from the YAML:
+
+```bash
+python -m poetry run truss push
+✨ Model qwen-2-5-3b was successfully pushed ✨
+
+🪵 View logs for your deployment at http://127.0.0.1:8000/projects/<project-id>/models/qwen-2-5-3b/logs
+🚰 Attempting to sync truss with remote
+No changes observed, skipping patching.
+👀 Watching for changes to truss...
+```
+
+`truss push` reads `./config.yaml`, validates `model_name`, and uses the
+current directory name as the project name. If that project does not exist, or
+your account API key's user is not allowed to deploy into it, the command fails
+with the API error message. After a successful push, the command keeps watching
+`config.yaml`. When the file changes, MiniTen queues an `update_model` job
+through the same deployment update pipeline used by the dashboard and
+`miniten models update`.
+
+You can override the config path or deploy once without watching:
+
+```bash
+python -m poetry run truss push --config config.yaml
+python -m poetry run truss push --no-watch
+```
+
+If you stop the push session, reattach the watcher later:
+
+```bash
+python -m poetry run truss watch
+```
+
+For noninteractive `init` in CI or smoke tests, pass `--model-name`:
+
+```bash
+python -m poetry run truss init qwen-2.5-3b --model-name qwen-2-5-3b
+```
+
+`model_name` must use MiniTen deployment-name formatting: lowercase letters,
+numbers, and hyphens only, starting and ending with a letter or number. If the
+name is invalid, `truss push` prints the validation issue before sending the
+request.
 
 ### OpenAI SDK Compatibility
 
@@ -611,6 +736,7 @@ Main route groups:
 |---|---|
 | Users | Account creation, lookup, deletion. |
 | Auth | Login/logout and user token creation. |
+| Account API Keys | User-scoped automation key creation/listing/revocation. |
 | Projects | Project creation, listing, lookup, deletion. |
 | Members | Project membership management. |
 | API Keys | Project-scoped inference key creation/listing/revocation. |
@@ -714,8 +840,8 @@ Then, in another terminal:
 make tests
 ```
 
-`make tests` runs the unit tests plus API, real Kubernetes, and CPU vLLM smoke
-tests. It does not run the GPU smoke target.
+`make tests` runs the unit tests plus API, real Kubernetes, CPU vLLM, and Truss
+CPU vLLM smoke tests. It does not run the GPU smoke target.
 
 API smoke test:
 
@@ -739,6 +865,14 @@ CPU vLLM smoke test:
 make setup-env
 make run-api
 make test-local-vllm
+```
+
+Truss CPU vLLM smoke test:
+
+```bash
+make setup-env
+make run-api
+make test-local-truss-vllm
 ```
 
 GPU vLLM smoke test:

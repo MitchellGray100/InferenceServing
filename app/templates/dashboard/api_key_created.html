@@ -9,7 +9,7 @@
   <pre id="created-api-key">{{ api_key.api_key }}</pre>
   <div class="actions">
     <button type="button" data-copy-target="#created-api-key">Copy</button>
-    <a class="button secondary" href="{{ url_for('dashboard.project_detail', project_id=project_id) }}">Back to project</a>
+    <a class="button secondary" href="{{ back_url or url_for('dashboard.project_detail', project_id=project_id) }}">{{ back_label or "Back to project" }}</a>
   </div>
 </section>
 {% endblock %}

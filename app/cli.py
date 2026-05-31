@@ -48,6 +48,10 @@ TOP_LEVEL_HELP = """command reference:
   api-keys use <project-api-key>
   api-keys revoke <project-id> <api-key-id>
 
+  account-api-keys create <name>
+  account-api-keys list
+  account-api-keys revoke <account-api-key-id>
+
   models deploy <project-id> --name <name> --model-id <hf-model-id>
       [--replicas <n>] [--cpu-request <value>] [--cpu-limit <value>]
       [--memory-request <value>] [--memory-limit <value>] [--gpu-count <n>]
@@ -542,6 +546,44 @@ def api_key_revoke(args: argparse.Namespace, _state: CliState, client: ApiClient
     )
 
 
+def account_api_key_create(
+    args: argparse.Namespace,
+    _state: CliState,
+    client: ApiClient,
+) -> None:
+    """Create an account API key."""
+    print_json(
+        client.request(
+            "POST",
+            "/v1/account/api-keys",
+            json_body={"name": args.name},
+        )
+    )
+
+
+def account_api_key_list(
+    _args: argparse.Namespace,
+    _state: CliState,
+    client: ApiClient,
+) -> None:
+    """List account API keys."""
+    print_json(client.request("GET", "/v1/account/api-keys"))
+
+
+def account_api_key_revoke(
+    args: argparse.Namespace,
+    _state: CliState,
+    client: ApiClient,
+) -> None:
+    """Revoke an account API key."""
+    print_json(
+        client.request(
+            "DELETE",
+            f"/v1/account/api-keys/{args.account_api_key_id}",
+        )
+    )
+
+
 def model_deploy(args: argparse.Namespace, _state: CliState, client: ApiClient) -> None:
     """Create a model deployment."""
     print_json(
@@ -892,6 +934,16 @@ def build_parser() -> argparse.ArgumentParser:
     revoke_key.add_argument("project_id")
     revoke_key.add_argument("api_key_id")
     revoke_key.set_defaults(handler=api_key_revoke)
+
+    account_api_keys = subcommands.add_parser("account-api-keys")
+    account_api_keys_sub = account_api_keys.add_subparsers(dest="command", required=True)
+    create_account_key = account_api_keys_sub.add_parser("create")
+    create_account_key.add_argument("name")
+    create_account_key.set_defaults(handler=account_api_key_create)
+    account_api_keys_sub.add_parser("list").set_defaults(handler=account_api_key_list)
+    revoke_account_key = account_api_keys_sub.add_parser("revoke")
+    revoke_account_key.add_argument("account_api_key_id")
+    revoke_account_key.set_defaults(handler=account_api_key_revoke)
 
     models = subcommands.add_parser("models")
     models_sub = models.add_subparsers(dest="command", required=True)

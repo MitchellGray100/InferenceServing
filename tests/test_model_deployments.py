@@ -140,6 +140,105 @@ def test_create_model_deployment_route(monkeypatch, client, auth_headers) -> Non
     assert response.get_json() == command_response()
 
 
+def test_create_model_deployment_with_project_api_key_route(monkeypatch, client) -> None:
+    def create_model_deployment_for_project_api_key(raw_api_key, data):
+        assert raw_api_key == "mt_live_project_key"
+        assert data["name"] == "qwen-small-prod"
+        return command_response()
+
+    monkeypatch.setattr(
+        "app.routes.model_deployments.model_deployment_service."
+        "create_model_deployment_for_project_api_key",
+        create_model_deployment_for_project_api_key,
+    )
+
+    response = client.post(
+        "/v1/models",
+        json={"name": "qwen-small-prod", "model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
+        headers={"Authorization": "Bearer mt_live_project_key"},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == command_response()
+
+
+def test_truss_push_model_route_uses_account_api_key(monkeypatch, client) -> None:
+    monkeypatch.setattr(
+        "app.routes.truss.account_api_key_service.authenticate_account_api_key",
+        lambda raw_key: {
+            "accountApiKeyID": "key-id",
+            "userID": USER_ID,
+            "apiKeyPrefix": "mt_live",
+        },
+    )
+
+    def create_for_name(user_id, project_name, data):
+        assert user_id == USER_ID
+        assert project_name == "qwen-2.5-3b"
+        assert data["name"] == "qwen-small-prod"
+        return command_response()
+
+    monkeypatch.setattr(
+        "app.routes.truss.model_deployment_service."
+        "create_model_deployment_for_account_project_name",
+        create_for_name,
+    )
+
+    response = client.post(
+        "/v1/truss/models",
+        json={
+            "project_name": "qwen-2.5-3b",
+            "deployment": {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+            },
+        },
+        headers={"Authorization": "Bearer mt_live_account_key"},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == command_response()
+
+
+def test_truss_update_model_route_uses_account_api_key(monkeypatch, client) -> None:
+    monkeypatch.setattr(
+        "app.routes.truss.account_api_key_service.authenticate_account_api_key",
+        lambda raw_key: {
+            "accountApiKeyID": "key-id",
+            "userID": USER_ID,
+            "apiKeyPrefix": "mt_live",
+        },
+    )
+
+    def update_for_name(user_id, project_name, data):
+        assert user_id == USER_ID
+        assert project_name == "qwen-2.5-3b"
+        assert data["name"] == "qwen-small-prod"
+        return command_response("update_model")
+
+    monkeypatch.setattr(
+        "app.routes.truss.model_deployment_service."
+        "update_model_deployment_for_account_project_name",
+        update_for_name,
+    )
+
+    response = client.patch(
+        "/v1/truss/models",
+        json={
+            "project_name": "qwen-2.5-3b",
+            "deployment": {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                "vllm": {"max_model_len": 2048},
+            },
+        },
+        headers={"Authorization": "Bearer mt_live_account_key"},
+    )
+
+    assert response.status_code == 202
+    assert response.get_json() == command_response("update_model")
+
+
 def test_list_model_deployments_route(monkeypatch, client, auth_headers) -> None:
     expected = {"modelDeployments": [model_deployment_response()]}
     monkeypatch.setattr(
@@ -731,6 +830,59 @@ def test_validate_deployment_update_rejects_identity_changes(app) -> None:
             {"model_id": "other/model"},
             deployment_row_fixture(),
         )
+
+
+def test_truss_account_update_allows_same_model_id(monkeypatch, app) -> None:
+    project = {
+        "project_id": PROJECT_ID,
+        "name": "qwen-2.5-3b",
+        "role": "member",
+    }
+    current = deployment_row_fixture()
+    updated = deployment_row_fixture()
+    updated["vllm_max_model_len"] = 2048
+    job = deployment_job_row_fixture()
+    job["job_type"] = "update_model"
+    fake = FakeTransaction(fetchones=[project, current, updated, job])
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    with app.app_context():
+        response = model_deployment_service.update_model_deployment_for_account_project_name(
+            USER_ID,
+            "qwen-2.5-3b",
+            {
+                "name": current["name"],
+                "model_id": current["model_id"],
+                "vllm": {"max_model_len": 2048},
+            },
+        )
+
+    assert response["modelDeployment"]["vllm"]["max_model_len"] == 2048
+    assert fake.cursor.executed[-2][1]["model_id"] == current["model_id"]
+
+
+def test_truss_account_update_rejects_changed_model_id(monkeypatch, app) -> None:
+    project = {
+        "project_id": PROJECT_ID,
+        "name": "qwen-2.5-3b",
+        "role": "member",
+    }
+    current = deployment_row_fixture()
+    fake = FakeTransaction(fetchones=[project, current])
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+
+    with app.app_context(), pytest.raises(ApiError) as error:
+        model_deployment_service.update_model_deployment_for_account_project_name(
+            USER_ID,
+            "qwen-2.5-3b",
+            {
+                "name": current["name"],
+                "model_id": "other/model",
+                "vllm": {"max_model_len": 2048},
+            },
+        )
+
+    assert error.value.message == "Model name and model_id cannot be changed after creation."
 
 
 def test_build_k8s_names() -> None:

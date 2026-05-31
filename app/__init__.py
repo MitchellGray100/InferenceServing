@@ -9,6 +9,7 @@ from flask import Flask
 
 from app.config import Config
 from app.routes import (
+    account_api_keys,
     api_keys,
     analytics,
     auth,
@@ -18,6 +19,7 @@ from app.routes import (
     model_deployments,
     project_members,
     projects,
+    truss,
     users,
 )
 from app.utils.errors import register_error_handlers
@@ -38,9 +40,12 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app.register_blueprint(users.bp)
     app.register_blueprint(projects.bp)
     app.register_blueprint(project_members.bp)
+    app.register_blueprint(account_api_keys.bp)
     app.register_blueprint(api_keys.bp)
+    app.register_blueprint(model_deployments.project_key_bp)
     app.register_blueprint(model_deployments.bp)
     app.register_blueprint(analytics.bp)
     app.register_blueprint(inference.bp)
+    app.register_blueprint(truss.bp)
 
     return app

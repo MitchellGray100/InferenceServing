@@ -23,6 +23,7 @@ from flask import (
 
 from app.security.tokens import decode_access_token, require_existing_user_id
 from app.services import (
+    account_api_key_service,
     analytics_service,
     api_key_service,
     auth_service,
@@ -295,10 +296,51 @@ def delete_account() -> Any:
 @require_dashboard_user
 def account() -> Any:
     """Show account details and account deletion controls."""
+    current = user_id()
     return render_template(
         "dashboard/account.html",
-        current_user=user_service.get_user(user_id()),
+        current_user=user_service.get_user(current),
+        account_api_keys=account_api_key_service.list_account_api_keys(current)[
+            "account_api_keys"
+        ],
     )
+
+
+@bp.post("/account/api-keys")
+@require_dashboard_user
+def account_api_key_create() -> Any:
+    """Create an account API key and show the raw value once."""
+    try:
+        key = account_api_key_service.create_account_api_key(
+            user_id(),
+            request.form.get("name"),
+        )
+        flash("Account API key created. Copy it now; it will not be shown again.", "success")
+        return render_template(
+            "dashboard/api_key_created.html",
+            api_key=key,
+            back_url=url_for("dashboard.account"),
+            back_label="Back to account",
+        )
+    except ApiError as exc:
+        flash(exc.message, "error")
+        return redirect(url_for("dashboard.account"))
+
+
+@bp.post("/account/api-keys/<account_api_key_id>/revoke")
+@require_dashboard_user
+def account_api_key_revoke(account_api_key_id: str) -> Any:
+    """Revoke an account API key."""
+    destination = url_for("dashboard.account")
+    try:
+        account_api_key_service.revoke_account_api_key(user_id(), account_api_key_id)
+        flash("Account API key revoked.", "success")
+    except ApiError as exc:
+        if exc.type == "account_api_key_not_found":
+            flash("Account API key was already removed.", "warning")
+        else:
+            flash(exc.message, "error")
+    return redirect(destination)
 
 
 @bp.route("/projects", methods=["GET", "POST"])

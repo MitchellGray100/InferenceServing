@@ -718,6 +718,72 @@ Secret
 
 ---
 
+## 7.4.1 Truss-Style YAML Deploy Flow
+
+MiniTen includes a lightweight `truss` command inspired by Baseten Truss. It is
+not a full Truss runtime or packaging implementation. It is a YAML-driven
+frontend over MiniTen's existing project and model deployment APIs.
+
+The Truss-style workflow uses account API keys because `truss init` can create
+or reuse projects on behalf of the authenticated user. Project API keys are
+still used only for inference.
+
+```text
+User runs truss login
+  |
+Prompt for MiniTen account API key
+  |
+Store key in local MiniTen CLI config
+
+User runs truss init qwen-2.5-3b
+  |
+Prompt for MiniTen deployment model_name
+  |
+POST /v1/truss/projects/init with account API key
+  |
+Create project if missing, or return existing project membership
+  |
+Write qwen-2.5-3b/config.yaml with model_name
+
+User runs truss push from qwen-2.5-3b/
+  |
+Read ./config.yaml
+  |
+Use current directory name as project name
+  |
+POST /v1/truss/models with account API key
+  |
+Validate project membership and deployment settings
+  |
+Create model_deployments row and deployment_jobs row
+  |
+Deployment Worker applies Kubernetes resources
+
+User keeps truss push running, or runs truss watch later
+  |
+Watch config.yaml for content changes
+  |
+PATCH /v1/truss/models with account API key
+  |
+Queue update_model deployment_jobs row
+```
+
+Relevant tables:
+
+```text
+account_api_keys
+projects
+project_members
+model_deployments
+deployment_jobs
+```
+
+The Truss-style push path uses the same validation and worker pipeline as
+`POST /v1/projects/{projectID}/models`, so it creates the same Kubernetes
+Namespace, PVC, Deployment, Service, HPA, and Secret resources.
+
+---
+
 ## 7.5 Start Model Flow
 
 ```text

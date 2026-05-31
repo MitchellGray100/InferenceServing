@@ -73,6 +73,32 @@ JOIN project_members pm ON pm.project_id = p.project_id
 WHERE p.project_id = %(project_id)s
   AND pm.user_id = %(user_id)s;
 
+-- name: get_project_by_name_for_user
+-- Fetch one project by display name only if the user is a member.
+SELECT
+  p.project_id,
+  p.name,
+  p.slug,
+  p.k8s_namespace,
+  p.created_at,
+  pm.role
+FROM projects p
+JOIN project_members pm ON pm.project_id = p.project_id
+WHERE p.name = %(name)s
+  AND pm.user_id = %(user_id)s;
+
+-- name: get_project_by_id
+-- Fetch project metadata when a project-scoped API key has already authorized
+-- access and no user membership boundary is needed.
+SELECT
+  project_id,
+  name,
+  slug,
+  k8s_namespace,
+  created_at
+FROM projects
+WHERE project_id = %(project_id)s;
+
 -- name: get_project_member_role
 -- Small authorization lookup used throughout services before project-scoped
 -- reads or writes.

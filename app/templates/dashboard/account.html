@@ -20,6 +20,43 @@
   </table>
 </section>
 
+<section class="panel">
+  <div class="section-heading">
+    <h2>Account API Keys</h2>
+  </div>
+  <p class="muted">Account API keys are for user-level automation such as Truss commands. They are not accepted for inference.</p>
+  <form method="post" action="{{ url_for('dashboard.account_api_key_create') }}" class="inline-form">
+    <input name="name" placeholder="Key name" required>
+    <button type="submit">Create account API key</button>
+  </form>
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Prefix</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for key in account_api_keys %}
+        {% set revoked = key.revoked_at %}
+        <tr>
+          <td>{{ key.name }}</td>
+          <td><code>{{ key.key_prefix }}</code></td>
+          <td><span class="{{ 'status-revoked' if revoked else 'status-active' }}">{{ "Revoked" if revoked else "Active" }}</span></td>
+          <td>{{ key.created_at }}</td>
+          <td>{{ key.last_used_at or "Never" }}</td>
+          <td>
+            {% if not revoked %}
+              <form method="post" action="{{ url_for('dashboard.account_api_key_revoke', account_api_key_id=key.accountApiKeyID) }}" data-confirm="Revoke account API key {{ key.name }}?" data-confirm-accept-label="Revoke">
+                <button class="danger small" type="submit">Revoke</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6">No account API keys yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
 <section class="danger-zone">
   <h2>Delete account</h2>
   <p class="muted">This removes your account and cannot be undone. Projects where you are the only owner will also be deleted.</p>

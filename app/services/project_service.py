@@ -110,6 +110,39 @@ def get_project(user_id: Any, project_id: Any) -> dict[str, Any]:
     return serialize_project(row, role=row["role"])
 
 
+def get_project_by_name(user_id: Any, name: Any) -> dict[str, Any]:
+    """Return one project by name if the user is a member."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    project_name = validate_project_name(name)
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            project = get_project_by_name_for_user_with_cursor(
+                cur,
+                project_name,
+                canonical_user_id,
+            )
+
+    if project is None:
+        logger.info(
+            "Project name lookup missed name=%s user_id=%s.",
+            project_name,
+            canonical_user_id,
+        )
+        raise project_not_found_error()
+    return serialize_project(project, role=project["role"])
+
+
+def create_project_if_missing(user_id: Any, name: Any) -> dict[str, Any]:
+    """Return a user's project by name, creating it when absent."""
+    try:
+        return get_project_by_name(user_id, name)
+    except ApiError as exc:
+        if exc.type != "project_not_found":
+            raise
+    return create_project(user_id, name)
+
+
 def delete_project(user_id: Any, project_id: Any) -> dict[str, bool]:
     """Delete a project when the current user is an owner.
 
@@ -474,6 +507,18 @@ def get_project_for_user_with_cursor(cur: Any, project_id: str, user_id: str) ->
         queries.get("get_project_for_user"),
         {
             "project_id": project_id,
+            "user_id": user_id,
+        },
+    )
+    return cur.fetchone()
+
+
+def get_project_by_name_for_user_with_cursor(cur: Any, name: str, user_id: str) -> Any:
+    """Return project metadata plus role by project name using an existing cursor."""
+    cur.execute(
+        queries.get("get_project_by_name_for_user"),
+        {
+            "name": name,
             "user_id": user_id,
         },
     )

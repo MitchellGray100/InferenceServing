@@ -116,6 +116,24 @@ CREATE TABLE api_keys (
   CONSTRAINT uq_api_keys_project_name UNIQUE(project_id, name)
 );
 
+-- Account-scoped API keys authenticate user-level automation such as Truss.
+-- They are not valid for inference routes.
+CREATE TABLE account_api_keys (
+  account_api_key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at TIMESTAMP,
+  revoked_at TIMESTAMP,
+
+  CONSTRAINT uq_account_api_keys_key_hash UNIQUE(key_hash)
+);
+
 -- Lightweight inference request metadata for analytics and debugging. Prompts
 -- and model responses are intentionally not stored.
 CREATE TABLE inference_requests (
@@ -292,6 +310,16 @@ ON api_keys(project_id);
 
 CREATE INDEX idx_api_keys_key_prefix
 ON api_keys(key_prefix);
+
+CREATE UNIQUE INDEX uq_account_api_keys_user_active_name
+ON account_api_keys(user_id, name)
+WHERE revoked_at IS NULL;
+
+CREATE INDEX idx_account_api_keys_user_id
+ON account_api_keys(user_id);
+
+CREATE INDEX idx_account_api_keys_key_prefix
+ON account_api_keys(key_prefix);
 
 CREATE INDEX idx_inference_requests_project_id
 ON inference_requests(project_id);

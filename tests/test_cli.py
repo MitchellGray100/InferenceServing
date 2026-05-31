@@ -93,6 +93,22 @@ def test_api_key_create_can_save_project_key(cli_config, monkeypatch):
     )
 
 
+def test_account_api_key_commands(cli_config, calls):
+    write_config(cli_config, access_token="user-token")
+
+    assert cli.main(["account-api-keys", "create", "truss"]) == 0
+    assert cli.main(["account-api-keys", "list"]) == 0
+    assert cli.main(["account-api-keys", "revoke", "key-id"]) == 0
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/v1/account/api-keys")
+    assert calls[0]["json"] == {"name": "truss"}
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["url"].endswith("/v1/account/api-keys")
+    assert calls[2]["method"] == "DELETE"
+    assert calls[2]["url"].endswith("/v1/account/api-keys/key-id")
+
+
 def test_model_deploy_sends_settings(cli_config, calls):
     write_config(cli_config, access_token="user-token")
 

@@ -241,6 +241,7 @@ def authenticate_project_api_key(raw_key: str) -> dict[str, str]:
                         "apiKeyID": str(row["api_key_id"]),
                         "projectID": str(row["project_id"]),
                         "apiKeyPrefix": row["key_prefix"],
+                        "createdByUserID": str(row["created_by_user_id"]),
                     }
 
     logger.info("Project API key authentication failed for prefix=%s.", key_prefix)

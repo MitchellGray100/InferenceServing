@@ -250,11 +250,29 @@ def test_account_page_shows_account_controls(monkeypatch):
             "last_login_at": None,
         },
     )
+    monkeypatch.setattr(
+        "app.routes.dashboard.account_api_key_service.list_account_api_keys",
+        lambda current_user_id: {
+            "account_api_keys": [
+                {
+                    "accountApiKeyID": "44444444-4444-4444-4444-444444444444",
+                    "userID": current_user_id,
+                    "name": "truss",
+                    "key_prefix": "mt_live",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "last_used_at": None,
+                    "revoked_at": None,
+                }
+            ]
+        },
+    )
 
     response = client.get("/account")
 
     assert response.status_code == 200
     assert b"user@example.com" in response.data
+    assert b"Account API Keys" in response.data
+    assert b"truss" in response.data
     assert b"Delete account" in response.data
     assert b"deleting your account also deletes the projects and models" in response.data
     assert b'data-confirm-accept-label="Delete account"' in response.data
@@ -677,6 +695,24 @@ def test_api_key_created_page_has_copy_button(monkeypatch):
     assert response.status_code == 200
     assert b'id="created-api-key"' in response.data
     assert b'data-copy-target="#created-api-key"' in response.data
+
+
+def test_account_api_key_created_page_has_copy_button(monkeypatch):
+    app = make_app()
+    client = app.test_client()
+    login(client, app)
+
+    monkeypatch.setattr(
+        "app.routes.dashboard.account_api_key_service.create_account_api_key",
+        lambda user_id, name: {"api_key": "mt_live_account_secret"},
+    )
+
+    response = client.post("/account/api-keys", data={"name": "truss"})
+
+    assert response.status_code == 200
+    assert b'id="created-api-key"' in response.data
+    assert b'data-copy-target="#created-api-key"' in response.data
+    assert b"Back to account" in response.data
 
 
 def test_api_key_revoke_missing_shows_warning(monkeypatch):

@@ -65,6 +65,9 @@ jobs:
       - name: Run local vLLM smoke tests
         run: make test-local-vllm
 
+      - name: Run local Truss vLLM smoke tests
+        run: make test-local-truss-vllm
+
       - name: Print API logs on failure
         if: failure()
         run: cat /tmp/miniten-api.log || true

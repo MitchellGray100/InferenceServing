@@ -129,6 +129,36 @@ def test_project_routes_require_auth(client) -> None:
     assert response.get_json()["error"]["type"] == "unauthorized"
 
 
+def test_truss_init_project_route_uses_account_api_key(monkeypatch, client) -> None:
+    monkeypatch.setattr(
+        "app.routes.truss.account_api_key_service.authenticate_account_api_key",
+        lambda raw_key: {
+            "accountApiKeyID": "key-id",
+            "userID": "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e",
+            "apiKeyPrefix": "mt_live",
+        },
+    )
+
+    def create_if_missing(user_id, name):
+        assert user_id == "9d41b65e-1d5a-4f24-a4c6-98f4df0c2c5e"
+        assert name == "qwen-2.5-3b"
+        return {**project_response(), "name": name}
+
+    monkeypatch.setattr(
+        "app.routes.truss.project_service.create_project_if_missing",
+        create_if_missing,
+    )
+
+    response = client.post(
+        "/v1/truss/projects/init",
+        json={"name": "qwen-2.5-3b"},
+        headers={"Authorization": "Bearer mt_live_account_key"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["project"]["name"] == "qwen-2.5-3b"
+
+
 def test_list_project_members_route(monkeypatch, client, auth_headers) -> None:
     expected = {"members": [member_response()]}
     monkeypatch.setattr(

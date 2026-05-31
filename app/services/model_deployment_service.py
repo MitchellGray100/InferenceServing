@@ -17,9 +17,11 @@ from app.db.sql import load_queries
 from app.k8s import client as k8s_client
 from app.k8s import deployment_manager
 from app.k8s.names import build_model_resource_names
+from app.services import api_key_service
 from app.services.project_service import (
     VIEW_ROLES,
     WRITE_ROLES,
+    get_project_by_name_for_user_with_cursor,
     get_project_role_with_cursor,
     require_role,
 )
@@ -102,22 +104,194 @@ def create_model_deployment(
     """
     canonical_user_id = validate_uuid(user_id, "userID")
     canonical_project_id = validate_uuid(project_id, "projectID")
+    return create_model_deployment_for_project(
+        canonical_user_id,
+        canonical_project_id,
+        data,
+        require_user_membership=True,
+    )
+
+
+def create_model_deployment_for_project_api_key(
+    raw_api_key: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a deployment in the project attached to a project API key."""
+    identity = api_key_service.authenticate_project_api_key(raw_api_key)
+    return create_model_deployment_for_project(
+        identity["createdByUserID"],
+        identity["projectID"],
+        data,
+        require_user_membership=False,
+    )
+
+
+def create_model_deployment_for_account_project_name(
+    user_id: Any,
+    project_name: Any,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a deployment in a named project using account-key identity."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    name = validate_string(project_name, "projectName", max_length=80)
     spec = validate_deployment_spec(data)
 
     with transaction() as conn:
         with conn.cursor() as cur:
-            project = get_project_for_user_with_cursor(
+            project = get_project_by_name_for_user_with_cursor(
                 cur,
-                canonical_project_id,
+                name,
                 canonical_user_id,
             )
-            require_role(project["role"] if project else None, WRITE_ROLES)
+            if project is None:
+                raise ApiError(
+                    type="project_not_found",
+                    message="Project does not exist.",
+                    status_code=404,
+                )
+            require_role(project["role"], WRITE_ROLES)
 
             try:
                 cur.execute(
                     queries.get("release_deleted_model_deployment_name"),
                     {
-                        "project_id": canonical_project_id,
+                        "project_id": project["project_id"],
+                        "name": spec["name"],
+                    },
+                )
+                cur.execute(
+                    queries.get("create_model_deployment"),
+                    {
+                        **spec,
+                        **build_k8s_names(project["k8s_namespace"], spec["name"]),
+                        "project_id": project["project_id"],
+                        "status": "deploying",
+                        "created_by_user_id": canonical_user_id,
+                    },
+                )
+            except Exception as exc:
+                if _is_unique_violation(exc):
+                    raise ApiError(
+                        type="validation_error",
+                        message=(
+                            f"A model deployment named {spec['name']} already exists. "
+                            "Start it, update it, or delete it first."
+                        ),
+                        status_code=409,
+                    ) from exc
+                raise
+
+            deployment = cur.fetchone()
+            job = enqueue_deployment_job_with_cursor(
+                cur,
+                str(project["project_id"]),
+                deployment["model_deployment_id"],
+                JOB_TYPES["deploy"],
+                build_job_payload("deploy_model", deployment),
+            )
+
+    return {
+        "modelDeployment": serialize_model_deployment(deployment),
+        "deploymentJob": serialize_deployment_job(job),
+    }
+
+
+def update_model_deployment_for_account_project_name(
+    user_id: Any,
+    project_name: Any,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Update a named deployment in a named project using account-key identity."""
+    canonical_user_id = validate_uuid(user_id, "userID")
+    name = validate_string(project_name, "projectName", max_length=80)
+    requested_model_name = validate_string(data.get("name"), "name")
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            project = get_project_by_name_for_user_with_cursor(
+                cur,
+                name,
+                canonical_user_id,
+            )
+            if project is None:
+                raise ApiError(
+                    type="project_not_found",
+                    message="Project does not exist.",
+                    status_code=404,
+                )
+            require_role(project["role"], WRITE_ROLES)
+
+            cur.execute(
+                queries.get("get_model_deployment_by_name"),
+                {
+                    "project_id": project["project_id"],
+                    "name": requested_model_name,
+                },
+            )
+            current = cur.fetchone()
+            if current is None:
+                raise model_deployment_not_found_error()
+
+            update_data = dict(data)
+            update_data.pop("name", None)
+            requested_model_id = update_data.pop("model_id", None)
+            if requested_model_id is not None and requested_model_id != current["model_id"]:
+                raise ApiError(
+                    type="validation_error",
+                    message="Model name and model_id cannot be changed after creation.",
+                    status_code=400,
+                )
+
+            spec = validate_deployment_update(update_data, current)
+            cur.execute(
+                queries.get("advance_model_deployment_settings"),
+                {
+                    "model_deployment_id": current["model_deployment_id"],
+                    **spec,
+                },
+            )
+            deployment = cur.fetchone()
+            job = enqueue_deployment_job_with_cursor(
+                cur,
+                str(project["project_id"]),
+                deployment["model_deployment_id"],
+                JOB_TYPES["update"],
+                build_job_payload("update_model", deployment),
+            )
+
+    return {
+        "modelDeployment": serialize_model_deployment(deployment),
+        "deploymentJob": serialize_deployment_job(job),
+    }
+
+
+def create_model_deployment_for_project(
+    created_by_user_id: str,
+    project_id: str,
+    data: dict[str, Any],
+    *,
+    require_user_membership: bool,
+) -> dict[str, Any]:
+    """Create deployment metadata after caller-specific authorization."""
+    spec = validate_deployment_spec(data)
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            project = (
+                get_project_for_user_with_cursor(cur, project_id, created_by_user_id)
+                if require_user_membership
+                else get_project_by_id_with_cursor(cur, project_id)
+            )
+            if require_user_membership:
+                require_role(project["role"] if project else None, WRITE_ROLES)
+            if project is None:
+                raise model_deployment_not_found_error()
+
+            try:
+                cur.execute(
+                    queries.get("release_deleted_model_deployment_name"),
+                    {
+                        "project_id": project_id,
                         "name": spec["name"],
                     },
                 )
@@ -129,16 +303,16 @@ def create_model_deployment(
                     {
                         **spec,
                         **build_k8s_names(project["k8s_namespace"], spec["name"]),
-                        "project_id": canonical_project_id,
+                        "project_id": project_id,
                         "status": "deploying",
-                        "created_by_user_id": canonical_user_id,
+                        "created_by_user_id": created_by_user_id,
                     },
                 )
             except Exception as exc:
                 if _is_unique_violation(exc):
                     logger.info(
                         "Model deployment creation rejected duplicate name project_id=%s name=%s.",
-                        canonical_project_id,
+                        project_id,
                         spec["name"],
                     )
                     raise ApiError(
@@ -154,7 +328,7 @@ def create_model_deployment(
             deployment = cur.fetchone()
             job = enqueue_deployment_job_with_cursor(
                 cur,
-                canonical_project_id,
+                project_id,
                 deployment["model_deployment_id"],
                 JOB_TYPES["deploy"],
                 build_job_payload("deploy_model", deployment),
@@ -163,7 +337,7 @@ def create_model_deployment(
     logger.info(
         "Created model deployment model_deployment_id=%s project_id=%s job_id=%s.",
         deployment["model_deployment_id"],
-        canonical_project_id,
+        project_id,
         job["deployment_job_id"],
     )
     return {
@@ -1044,6 +1218,15 @@ def get_project_for_user_with_cursor(cur: Any, project_id: str, user_id: str) ->
             "project_id": project_id,
             "user_id": user_id,
         },
+    )
+    return cur.fetchone()
+
+
+def get_project_by_id_with_cursor(cur: Any, project_id: str) -> Any:
+    """Return project metadata after project API key authorization."""
+    cur.execute(
+        queries.get("get_project_by_id"),
+        {"project_id": project_id},
     )
     return cur.fetchone()
 

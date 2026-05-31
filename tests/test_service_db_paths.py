@@ -12,6 +12,7 @@ import pytest
 
 from app import create_app
 from app.services import (
+    account_api_key_service,
     api_key_service,
     auth_service,
     model_deployment_service,
@@ -143,6 +144,22 @@ def api_key_row(**overrides):
         "api_key_id": API_KEY_ID,
         "project_id": PROJECT_ID,
         "name": "Production",
+        "key_prefix": "mt_live_visible",
+        "key_hash": "sha256:hash",
+        "created_by_user_id": USER_ID,
+        "created_at": NOW,
+        "last_used_at": None,
+        "revoked_at": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def account_api_key_row(**overrides):
+    row = {
+        "account_api_key_id": API_KEY_ID,
+        "user_id": USER_ID,
+        "name": "Truss",
         "key_prefix": "mt_live_visible",
         "key_hash": "sha256:hash",
         "created_at": NOW,
@@ -613,6 +630,7 @@ def test_api_key_service_authenticate_project_api_key(monkeypatch, app) -> None:
         "apiKeyID": API_KEY_ID,
         "projectID": PROJECT_ID,
         "apiKeyPrefix": "mt_live_visible",
+        "createdByUserID": USER_ID,
     }
 
 
@@ -627,6 +645,77 @@ def test_api_key_service_authenticate_rejects_no_matching_hash(monkeypatch, app)
 
     with app.app_context(), pytest.raises(ApiError):
         api_key_service.authenticate_project_api_key("mt_live_visible_secret")
+
+
+def test_account_api_key_service_create_list_revoke_and_authenticate(
+    monkeypatch,
+    app,
+) -> None:
+    fake = FakeTransaction(
+        fetchones=[
+            account_api_key_row(),
+            {"account_api_key_id": API_KEY_ID, "revoked_at": NOW},
+        ],
+        fetchalls=[[account_api_key_row()], [account_api_key_row()]],
+    )
+    monkeypatch.setattr(account_api_key_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        account_api_key_service.api_keys,
+        "generate_api_key",
+        lambda: ("mt_live_visible_secret", "mt_live_visible"),
+    )
+    monkeypatch.setattr(
+        account_api_key_service.api_keys,
+        "hash_api_key",
+        lambda raw_key: "sha256:hash",
+    )
+    monkeypatch.setattr(
+        account_api_key_service.api_keys,
+        "verify_api_key",
+        lambda raw_key, key_hash: True,
+    )
+
+    with app.app_context():
+        created = account_api_key_service.create_account_api_key(USER_ID, "Truss")
+        listed = account_api_key_service.list_account_api_keys(USER_ID)
+        identity = account_api_key_service.authenticate_account_api_key(
+            "mt_live_visible_secret"
+        )
+        revoked = account_api_key_service.revoke_account_api_key(USER_ID, API_KEY_ID)
+
+    assert created["api_key"] == "mt_live_visible_secret"
+    assert listed["account_api_keys"][0]["accountApiKeyID"] == API_KEY_ID
+    assert identity["userID"] == USER_ID
+    assert revoked == {"revoked": True}
+
+
+def test_model_deployment_create_with_project_api_key(monkeypatch, app) -> None:
+    fake = FakeTransaction(fetchones=[project_row(), deployment_row(), job_row()])
+    monkeypatch.setattr(model_deployment_service, "transaction", fake.transaction)
+    monkeypatch.setattr(
+        model_deployment_service.api_key_service,
+        "authenticate_project_api_key",
+        lambda raw_key: {
+            "apiKeyID": API_KEY_ID,
+            "projectID": PROJECT_ID,
+            "apiKeyPrefix": "mt_live_visible",
+            "createdByUserID": USER_ID,
+        },
+    )
+
+    with app.app_context():
+        created = model_deployment_service.create_model_deployment_for_project_api_key(
+            "mt_live_visible_secret",
+            {
+                "name": "qwen-small-prod",
+                "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+            },
+        )
+
+    assert created["modelDeployment"]["projectID"] == PROJECT_ID
+    create_params = fake.cursor.executed[2][1]
+    assert create_params["project_id"] == PROJECT_ID
+    assert create_params["created_by_user_id"] == USER_ID
 
 
 def test_model_deployment_service_create_list_get_commands(monkeypatch, app) -> None:

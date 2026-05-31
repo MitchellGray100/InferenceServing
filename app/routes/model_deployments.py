@@ -10,12 +10,27 @@ from flask import Blueprint, jsonify, request
 
 from app.security.tokens import current_user_id, require_user_auth
 from app.services import model_deployment_service
+from app.routes.inference import get_project_api_key
 from app.utils.validation import require_field, require_json_object
 
 
 # Model deployment routes are nested under projects because project membership
 # is the authorization boundary for every model lifecycle operation.
 bp = Blueprint("model_deployments", __name__, url_prefix="/v1/projects")
+
+
+project_key_bp = Blueprint("project_key_model_deployments", __name__, url_prefix="/v1")
+
+
+@project_key_bp.post("/models")
+def create_model_deployment_for_project_key() -> tuple[object, int]:
+    """Create a model deployment in the project attached to a project API key."""
+    data = require_json_object(request.get_json(silent=True))
+    response = model_deployment_service.create_model_deployment_for_project_api_key(
+        raw_api_key=get_project_api_key(),
+        data=data,
+    )
+    return jsonify(response), 201
 
 
 @bp.post("/<project_id>/models")

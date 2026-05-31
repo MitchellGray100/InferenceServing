@@ -11,6 +11,7 @@ from app.services.api_key_service import (
     api_key_not_found_error,
     serialize_api_key,
 )
+from app.services.account_api_key_service import serialize_account_api_key
 
 
 PROJECT_ID = "a2fc41b7-862e-4060-b466-2376f29227bb"
@@ -148,6 +149,51 @@ def test_api_key_routes_require_auth(client) -> None:
     assert response.get_json()["error"]["type"] == "unauthorized"
 
 
+def test_account_api_key_routes(monkeypatch, client, auth_headers) -> None:
+    account_key = {
+        "accountApiKeyID": API_KEY_ID,
+        "userID": USER_ID,
+        "name": "Truss",
+        "key_prefix": "mt_live_visiblepart",
+        "created_at": "2026-05-17T12:00:00Z",
+        "last_used_at": None,
+        "revoked_at": None,
+    }
+
+    def create_key(user_id, name):
+        assert user_id == USER_ID
+        assert name == "Truss"
+        return {**account_key, "api_key": "mt_live_visiblepart_secretpart"}
+
+    monkeypatch.setattr(
+        "app.routes.account_api_keys.account_api_key_service.create_account_api_key",
+        create_key,
+    )
+    monkeypatch.setattr(
+        "app.routes.account_api_keys.account_api_key_service.list_account_api_keys",
+        lambda user_id: {"account_api_keys": [account_key]},
+    )
+    monkeypatch.setattr(
+        "app.routes.account_api_keys.account_api_key_service.revoke_account_api_key",
+        lambda user_id, account_api_key_id: {"revoked": True},
+    )
+
+    created = client.post(
+        "/v1/account/api-keys",
+        json={"name": "Truss"},
+        headers=auth_headers,
+    )
+    listed = client.get("/v1/account/api-keys", headers=auth_headers)
+    revoked = client.delete(f"/v1/account/api-keys/{API_KEY_ID}", headers=auth_headers)
+
+    assert created.status_code == 201
+    assert created.get_json()["api_key"] == "mt_live_visiblepart_secretpart"
+    assert listed.status_code == 200
+    assert listed.get_json() == {"account_api_keys": [account_key]}
+    assert revoked.status_code == 200
+    assert revoked.get_json() == {"revoked": True}
+
+
 def test_serialize_api_key_does_not_expose_hash() -> None:
     row = {
         "api_key_id": API_KEY_ID,
@@ -163,6 +209,26 @@ def test_serialize_api_key_does_not_expose_hash() -> None:
     response = serialize_api_key(row)
 
     assert response == api_key_response()
+    assert "key_hash" not in response
+
+
+def test_serialize_account_api_key_does_not_expose_hash() -> None:
+    row = {
+        "account_api_key_id": API_KEY_ID,
+        "user_id": USER_ID,
+        "name": "Truss",
+        "key_prefix": "mt_live_visiblepart",
+        "key_hash": "sha256:secret",
+        "created_at": datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+        "last_used_at": None,
+        "revoked_at": None,
+    }
+
+    response = serialize_account_api_key(row)
+
+    assert response["accountApiKeyID"] == API_KEY_ID
+    assert response["userID"] == USER_ID
+    assert response["name"] == "Truss"
     assert "key_hash" not in response
 
 

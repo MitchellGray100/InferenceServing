@@ -332,6 +332,16 @@ not mixed into the project list. Deleting an account deletes its account API
 keys and also deletes projects where that account is the only owner; assign
 another owner first if a project should remain after the account is removed.
 
+### Logs
+
+![MiniTen logs page](docs/images/logsPage.png)
+
+The Logs page shows recent Kubernetes pod logs for a model deployment. It is
+used when a deployment is loading, restarting, or failing and you need the raw
+vLLM startup/runtime output. The page supports selecting a refresh interval and
+links back to the model deployment page so debugging can move between live
+status, jobs, and logs.
+
 ## CLI
 
 The `miniten` CLI uses the same HTTP API as the dashboard. Control-plane
